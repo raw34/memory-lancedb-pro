@@ -33,8 +33,10 @@ import {
 } from "./src/reflection-store.js";
 import {
   extractReflectionLearningGovernanceCandidates,
-  extractReflectionMappedMemories,
+  extractReflectionMappedMemoryItems,
 } from "./src/reflection-slices.js";
+import { createReflectionEventId } from "./src/reflection-event-store.js";
+import { buildReflectionMappedMetadata } from "./src/reflection-mapped-metadata.js";
 import { createMemoryCLI } from "./cli.js";
 
 // ============================================================================
@@ -96,6 +98,7 @@ interface PluginConfig {
   memoryReflection?: {
     enabled?: boolean;
     storeToLanceDB?: boolean;
+    writeLegacyCombined?: boolean;
     injectMode?: ReflectionInjectMode;
     agentId?: string;
     messageCount?: number;
@@ -1715,6 +1718,7 @@ const memoryLanceDBProPlugin = {
       const reflectionDedupeErrorSignals = config.memoryReflection?.dedupeErrorSignals !== false;
       const reflectionInjectMode = config.memoryReflection?.injectMode ?? "inheritance+derived";
       const reflectionStoreToLanceDB = config.memoryReflection?.storeToLanceDB !== false;
+      const reflectionWriteLegacyCombined = config.memoryReflection?.writeLegacyCombined !== false;
       const warnedInvalidReflectionAgentIds = new Set<string>();
 
       const resolveReflectionRunAgentId = (cfg: unknown, sourceAgentId: string): string => {
@@ -1973,7 +1977,15 @@ const memoryLanceDBProPlugin = {
             }
           }
 
-          const mappedReflectionMemories = extractReflectionMappedMemories(reflectionText);
+          const reflectionEventId = createReflectionEventId({
+            runAt: nowTs,
+            sessionKey,
+            sessionId: currentSessionId || "unknown",
+            agentId: sourceAgentId,
+            command: String(event.action || "unknown"),
+          });
+
+          const mappedReflectionMemories = extractReflectionMappedMemoryItems(reflectionText);
           for (const mapped of mappedReflectionMemories) {
             const vector = await embedder.embedPassage(mapped.text);
             let existing: Awaited<ReturnType<typeof store.vectorSearch>> = [];
@@ -1990,17 +2002,17 @@ const memoryLanceDBProPlugin = {
             }
 
             const importance = mapped.category === "decision" ? 0.85 : 0.8;
-            const metadata = JSON.stringify({
-              type: "memory-reflection-section",
-              stage: "reflect-store",
-              reflectionSource: relPath,
-              reflectionCommand: String(event.action || "unknown"),
-              section: mapped.heading,
+            const metadata = JSON.stringify(buildReflectionMappedMetadata({
+              mappedItem: mapped,
+              eventId: reflectionEventId,
               agentId: sourceAgentId,
               sessionKey,
               sessionId: currentSessionId || "unknown",
-              storedAt: nowTs,
-            });
+              runAt: nowTs,
+              usedFallback: reflectionGenerated.usedFallback,
+              toolErrorSignals,
+              sourceReflectionPath: relPath,
+            }));
 
             const storedEntry = await store.store({
               text: mapped.text,
@@ -2030,6 +2042,9 @@ const memoryLanceDBProPlugin = {
               toolErrorSignals,
               runAt: nowTs,
               usedFallback: reflectionGenerated.usedFallback,
+              eventId: reflectionEventId,
+              sourceReflectionPath: relPath,
+              writeLegacyCombined: reflectionWriteLegacyCombined,
               embedPassage: (text) => embedder.embedPassage(text),
               vectorSearch: (vector, limit, minScore, scopeFilter) =>
                 store.vectorSearch(vector, limit, minScore, scopeFilter),
@@ -2360,6 +2375,7 @@ export function parsePluginConfig(value: unknown): PluginConfig {
       ? {
         enabled: sessionStrategy === "memoryReflection",
         storeToLanceDB: reflectionStoreToLanceDB,
+        writeLegacyCombined: memoryReflectionRaw.writeLegacyCombined !== false,
         injectMode: reflectionInjectMode,
         agentId: asNonEmptyString(memoryReflectionRaw.agentId),
         messageCount: reflectionMessageCount,
@@ -2376,6 +2392,7 @@ export function parsePluginConfig(value: unknown): PluginConfig {
       : {
         enabled: sessionStrategy === "memoryReflection",
         storeToLanceDB: reflectionStoreToLanceDB,
+        writeLegacyCombined: true,
         injectMode: "inheritance+derived",
         agentId: undefined,
         messageCount: reflectionMessageCount,

@@ -9,6 +9,22 @@ export interface ReflectionMappedMemory {
   heading: string;
 }
 
+export type ReflectionMappedKind = "user-model" | "agent-model" | "lesson" | "decision";
+
+export interface ReflectionMappedMemoryItem extends ReflectionMappedMemory {
+  mappedKind: ReflectionMappedKind;
+  ordinal: number;
+  groupSize: number;
+}
+
+export interface ReflectionSliceItem {
+  text: string;
+  itemKind: "invariant" | "derived";
+  section: "Invariants" | "Derived";
+  ordinal: number;
+  groupSize: number;
+}
+
 export interface ReflectionGovernanceEntry {
   priority?: string;
   status?: string;
@@ -153,16 +169,42 @@ function parseReflectionGovernanceEntry(block: string): ReflectionGovernanceEntr
 }
 
 export function extractReflectionMappedMemories(reflectionText: string): ReflectionMappedMemory[] {
-  const mappedSections: Array<{ heading: string; category: "preference" | "fact" | "decision" }> = [
-    { heading: "User model deltas (about the human)", category: "preference" },
-    { heading: "Agent model deltas (about the assistant/system)", category: "preference" },
-    { heading: "Lessons & pitfalls (symptom / cause / fix / prevention)", category: "fact" },
-    { heading: "Decisions (durable)", category: "decision" },
+  return extractReflectionMappedMemoryItems(reflectionText).map(({ text, category, heading }) => ({ text, category, heading }));
+}
+
+export function extractReflectionMappedMemoryItems(reflectionText: string): ReflectionMappedMemoryItem[] {
+  const mappedSections: Array<{
+    heading: string;
+    category: "preference" | "fact" | "decision";
+    mappedKind: ReflectionMappedKind;
+  }> = [
+    {
+      heading: "User model deltas (about the human)",
+      category: "preference",
+      mappedKind: "user-model",
+    },
+    {
+      heading: "Agent model deltas (about the assistant/system)",
+      category: "preference",
+      mappedKind: "agent-model",
+    },
+    {
+      heading: "Lessons & pitfalls (symptom / cause / fix / prevention)",
+      category: "fact",
+      mappedKind: "lesson",
+    },
+    {
+      heading: "Decisions (durable)",
+      category: "decision",
+      mappedKind: "decision",
+    },
   ];
 
-  return mappedSections.flatMap(({ heading, category }) =>
-    sanitizeReflectionSliceLines(parseSectionBullets(reflectionText, heading)).map((text) => ({ text, category, heading }))
-  );
+  return mappedSections.flatMap(({ heading, category, mappedKind }) => {
+    const lines = sanitizeReflectionSliceLines(parseSectionBullets(reflectionText, heading));
+    const groupSize = lines.length;
+    return lines.map((text, ordinal) => ({ text, category, heading, mappedKind, ordinal, groupSize }));
+  });
 }
 
 export function extractReflectionSlices(reflectionText: string): ReflectionSlices {
@@ -196,4 +238,27 @@ export function extractReflectionSlices(reflectionText: string): ReflectionSlice
     invariants: invariants.slice(0, 8),
     derived: derived.slice(0, 10),
   };
+}
+
+export function extractReflectionSliceItems(reflectionText: string): ReflectionSliceItem[] {
+  const slices = extractReflectionSlices(reflectionText);
+  const invariantGroupSize = slices.invariants.length;
+  const derivedGroupSize = slices.derived.length;
+
+  const invariantItems = slices.invariants.map((text, ordinal) => ({
+    text,
+    itemKind: "invariant" as const,
+    section: "Invariants" as const,
+    ordinal,
+    groupSize: invariantGroupSize,
+  }));
+  const derivedItems = slices.derived.map((text, ordinal) => ({
+    text,
+    itemKind: "derived" as const,
+    section: "Derived" as const,
+    ordinal,
+    groupSize: derivedGroupSize,
+  }));
+
+  return [...invariantItems, ...derivedItems];
 }

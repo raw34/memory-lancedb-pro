@@ -195,20 +195,22 @@ Query → BM25 FTS ─────┘
   - 文件名为高精度时间戳 + agent/session token（带冲突后缀），例如 `HHMMSSmmm-agent-session[-xxxxxx].md`。
 - 写入 LanceDB（可选）：
   - 由 `memoryReflection.storeToLanceDB` 控制（且仅在 `sessionStrategy=memoryReflection` 下生效）。
-  - 每次反思事件仅写入一条合并后的 category=`reflection` 记录。
-  - 合并 metadata 同时包含 `invariants[]` 与 `derived[]`，并保留派生衰减语义（`decayModel`、`decayMidpointDays`、`decayK`、`deriveBaseWeight`、`deriveQuality`、`deriveSource`）。
-  - 写入前对该合并记录做一次相似度去重（命中 `> 0.97` 时跳过该次写入）。
+  - 每次反思事件会写入一条事件记录（`type=memory-reflection-event`）+ 多条 item 记录（`type=memory-reflection-item`，对应 `Invariants`/`Derived` 的每个 bullet）。
+  - 事件记录仅保留来源与审计信息（`eventId`、`sessionKey`、`usedFallback`、`errorSignals`、source path），不再携带整合数组 `invariants[]` / `derived[]`。
+  - item 记录携带逐条衰减元数据（`decayModel`、`decayMidpointDays`、`decayK`、`baseWeight`、`quality`）以及 `ordinal/groupSize`。
+  - 迁移兼容：`memoryReflection.writeLegacyCombined=true`（默认）时，仍会额外写入旧版合并记录（`type=memory-reflection`），并保留 `> 0.97` 相似度去重。
   - 展示标签使用 `reflection:<scope>`。
 - 独立代理（可选）：通过 `memoryReflection.agentId` 指定用于反思生成的代理（例如 `memory-distiller`）
   - 若配置的 `memoryReflection.agentId` 不在 `cfg.agents.list` 中，插件会明确 `warn` 并回退到当前 runtime agent id。
   - 对 embedded 运行，插件会解析目标代理主模型引用（`provider/model`），并显式传入 `provider` 与 `model`。
-- Invariant 切片注入：`before_agent_start` 注入 `<inherited-rules>`，来源为包含 `invariants[]` 的反思记忆。
+- Invariant 切片注入：`before_agent_start` 注入 `<inherited-rules>`，优先来源为 reflection item 行（`itemKind=invariant`），并兼容旧版 `invariants[]` 回退。
 - Derived 切片注入：`before_prompt_build` 注入 `<derived-focus>` 与 `<error-detected>`。
-  - `<derived-focus>` 来源为包含 `derived[]` 的反思记忆。
-  - 反思加载/注入阶段会对多条近期 derive 记忆做 logistic 衰减加权（不会改动全局 retriever 评分）：
+  - `<derived-focus>` 优先来源为 reflection item 行（`itemKind=derived`），并兼容旧版 `derived[]` 回退。
+  - 反思加载/注入阶段会对多条近期 item 记忆做 logistic 衰减加权（不会改动全局 retriever 评分）：
     - `weight = 1 / (1 + exp(k * (ageDays - midpointDays)))`
-    - 默认值：`midpointDays = 3`、`k = 1.2`
-    - fallback 生成的 derive 记录使用更低基础权重（`deriveBaseWeight = 0.35`，普通 derive 为 `1.0`）
+    - invariant 默认值：`midpointDays = 45`、`k = 0.22`、`baseWeight = 1.10`
+    - derived 默认值：`midpointDays = 7`、`k = 0.65`、`baseWeight = 1.00`
+    - fallback 生成的记录额外乘以 `0.75` 惩罚因子
   - 主路径优先使用显式 `## Derived` 段落并按 delta-like 规则过滤；仅兼容旧格式时才回退到 merged-section 关键词匹配。
 - 错误闭环：`after_tool_call` 捕获并去重工具错误签名，用于提醒与反思上下文
 
@@ -454,6 +456,7 @@ openclaw config get plugins.slots.memory
   },
   "memoryReflection": {
     "storeToLanceDB": true,
+    "writeLegacyCombined": true,
     "injectMode": "inheritance+derived",
     "agentId": "memory-distiller",
     "messageCount": 120,

@@ -27,10 +27,21 @@ const {
 const {
   storeReflectionToLanceDB,
   loadAgentReflectionSlicesFromEntries,
+  loadReflectionMappedRowsFromEntries,
   REFLECTION_DERIVE_LOGISTIC_K,
   REFLECTION_DERIVE_LOGISTIC_MIDPOINT_DAYS,
   REFLECTION_DERIVE_FALLBACK_BASE_WEIGHT,
 } = jiti("../src/reflection-store.ts");
+const {
+  REFLECTION_INVARIANT_DECAY_MIDPOINT_DAYS,
+  REFLECTION_INVARIANT_DECAY_K,
+  REFLECTION_INVARIANT_BASE_WEIGHT,
+  REFLECTION_DERIVED_DECAY_MIDPOINT_DAYS,
+  REFLECTION_DERIVED_DECAY_K,
+  REFLECTION_DERIVED_BASE_WEIGHT,
+} = jiti("../src/reflection-item-store.ts");
+const { buildReflectionMappedMetadata } = jiti("../src/reflection-mapped-metadata.ts");
+const { REFLECTION_FALLBACK_SCORE_FACTOR } = jiti("../src/reflection-ranking.ts");
 
 function messageLine(role, text, ts) {
   return JSON.stringify({
@@ -153,6 +164,19 @@ describe("memory reflection", () => {
             invariants: ["Always keep steps auditable."],
             derived: ["Next run keep verification concise."],
             deriveBaseWeight: 0.35,
+          }),
+        }),
+        "reflection:global"
+      );
+
+      assert.equal(
+        getDisplayCategoryTag({
+          category: "reflection",
+          scope: "global",
+          metadata: JSON.stringify({
+            type: "memory-reflection-event",
+            reflectionVersion: 4,
+            eventId: "refl-test",
           }),
         }),
         "reflection:global"
@@ -316,8 +340,8 @@ describe("memory reflection", () => {
     });
   });
 
-  describe("single-entry persistence", () => {
-    it("stores one combined reflection entry with invariant+derived slices and derive decay metadata", async () => {
+  describe("reflection persistence", () => {
+    it("stores event + itemized rows and keeps legacy combined rows by default", async () => {
       const storedEntries = [];
       const vectorSearchCalls = [];
 
@@ -336,6 +360,7 @@ describe("memory reflection", () => {
         toolErrorSignals: [{ signatureHash: "deadbeef" }],
         runAt: 1_700_000_000_000,
         usedFallback: false,
+        sourceReflectionPath: "memory/reflections/2026-03-07/test.md",
         embedPassage: async (text) => [text.length],
         vectorSearch: async (vector) => {
           vectorSearchCalls.push(vector);
@@ -348,28 +373,120 @@ describe("memory reflection", () => {
       });
 
       assert.equal(result.stored, true);
-      assert.deepEqual(result.storedKinds, ["combined"]);
+      assert.deepEqual(result.storedKinds, ["event", "item-invariant", "item-derived", "combined-legacy"]);
+      assert.equal(storedEntries.length, 4);
+      assert.equal(vectorSearchCalls.length, 1, "legacy combined row keeps compatibility dedupe path");
+
+      const metas = storedEntries.map((entry) => JSON.parse(entry.metadata));
+      const eventMeta = metas.find((meta) => meta.type === "memory-reflection-event");
+      const invariantMeta = metas.find((meta) => meta.type === "memory-reflection-item" && meta.itemKind === "invariant");
+      const derivedMeta = metas.find((meta) => meta.type === "memory-reflection-item" && meta.itemKind === "derived");
+      const legacyMeta = metas.find((meta) => meta.type === "memory-reflection");
+
+      assert.ok(eventMeta);
+      assert.equal(eventMeta.reflectionVersion, 4);
+      assert.equal(eventMeta.stage, "reflect-store");
+      assert.match(eventMeta.eventId, /^refl-/);
+      assert.equal(eventMeta.sourceReflectionPath, "memory/reflections/2026-03-07/test.md");
+      assert.equal(eventMeta.usedFallback, false);
+      assert.deepEqual(eventMeta.errorSignals, ["deadbeef"]);
+      assert.equal(Array.isArray(eventMeta.invariants), false);
+      assert.equal(Array.isArray(eventMeta.derived), false);
+
+      assert.ok(invariantMeta);
+      assert.equal(invariantMeta.reflectionVersion, 4);
+      assert.equal(invariantMeta.itemKind, "invariant");
+      assert.equal(invariantMeta.section, "Invariants");
+      assert.equal(invariantMeta.ordinal, 0);
+      assert.equal(invariantMeta.groupSize, 1);
+      assert.equal(invariantMeta.decayMidpointDays, REFLECTION_INVARIANT_DECAY_MIDPOINT_DAYS);
+      assert.equal(invariantMeta.decayK, REFLECTION_INVARIANT_DECAY_K);
+      assert.equal(invariantMeta.baseWeight, REFLECTION_INVARIANT_BASE_WEIGHT);
+      assert.equal(invariantMeta.usedFallback, false);
+
+      assert.ok(derivedMeta);
+      assert.equal(derivedMeta.reflectionVersion, 4);
+      assert.equal(derivedMeta.itemKind, "derived");
+      assert.equal(derivedMeta.section, "Derived");
+      assert.equal(derivedMeta.ordinal, 0);
+      assert.equal(derivedMeta.groupSize, 1);
+      assert.equal(derivedMeta.decayMidpointDays, REFLECTION_DERIVED_DECAY_MIDPOINT_DAYS);
+      assert.equal(derivedMeta.decayK, REFLECTION_DERIVED_DECAY_K);
+      assert.equal(derivedMeta.baseWeight, REFLECTION_DERIVED_BASE_WEIGHT);
+      assert.equal(derivedMeta.usedFallback, false);
+
+      assert.ok(legacyMeta);
+      assert.equal(legacyMeta.reflectionVersion, 3);
+      assert.deepEqual(legacyMeta.invariants, ["Always confirm assumptions before changing files."]);
+      assert.deepEqual(legacyMeta.derived, ["Next run verify reflection persistence with targeted tests."]);
+      assert.equal(legacyMeta.decayModel, "logistic");
+      assert.equal(legacyMeta.decayK, REFLECTION_DERIVE_LOGISTIC_K);
+      assert.equal(legacyMeta.decayMidpointDays, REFLECTION_DERIVE_LOGISTIC_MIDPOINT_DAYS);
+      assert.equal(legacyMeta.deriveBaseWeight, 1);
+    });
+
+    it("supports migration mode that disables legacy combined writes", async () => {
+      const storedEntries = [];
+      const result = await storeReflectionToLanceDB({
+        reflectionText: [
+          "## Invariants",
+          "- Always run tests after edits.",
+          "## Derived",
+          "- Next run keep post-check output in final summary.",
+        ].join("\n"),
+        sessionKey: "agent:main:session:def",
+        sessionId: "def",
+        agentId: "main",
+        command: "command:new",
+        scope: "global",
+        toolErrorSignals: [],
+        runAt: 1_700_100_000_000,
+        usedFallback: false,
+        writeLegacyCombined: false,
+        embedPassage: async (text) => [text.length],
+        vectorSearch: async () => [],
+        store: async (entry) => {
+          storedEntries.push(entry);
+          return { ...entry, id: `id-${storedEntries.length}`, timestamp: 1_700_100_000_000 };
+        },
+      });
+
+      assert.deepEqual(result.storedKinds, ["event", "item-invariant", "item-derived"]);
+      assert.equal(storedEntries.some((entry) => JSON.parse(entry.metadata).type === "memory-reflection"), false);
+    });
+
+    it("writes an event row even when invariant/derived slices are empty", async () => {
+      const storedEntries = [];
+      const result = await storeReflectionToLanceDB({
+        reflectionText: "## Context\n- run had no durable deltas",
+        sessionKey: "agent:main:session:ghi",
+        sessionId: "ghi",
+        agentId: "main",
+        command: "command:new",
+        scope: "global",
+        toolErrorSignals: [],
+        runAt: 1_700_200_000_000,
+        usedFallback: true,
+        writeLegacyCombined: false,
+        embedPassage: async (text) => [text.length],
+        vectorSearch: async () => [],
+        store: async (entry) => {
+          storedEntries.push(entry);
+          return { ...entry, id: `id-${storedEntries.length}`, timestamp: 1_700_200_000_000 };
+        },
+      });
+
+      assert.deepEqual(result.storedKinds, ["event"]);
       assert.equal(storedEntries.length, 1);
-      assert.equal(vectorSearchCalls.length, 1);
-
-      const stored = storedEntries[0];
-      const meta = JSON.parse(stored.metadata);
-
-      assert.equal(stored.category, "reflection");
-      assert.equal(meta.reflectionVersion, 3);
-      assert.deepEqual(meta.invariants, ["Always confirm assumptions before changing files."]);
-      assert.deepEqual(meta.derived, ["Next run verify reflection persistence with targeted tests."]);
-      assert.equal(meta.decayModel, "logistic");
-      assert.equal(meta.decayK, REFLECTION_DERIVE_LOGISTIC_K);
-      assert.equal(meta.decayMidpointDays, REFLECTION_DERIVE_LOGISTIC_MIDPOINT_DAYS);
-      assert.equal(meta.deriveBaseWeight, 1);
+      const meta = JSON.parse(storedEntries[0].metadata);
+      assert.equal(meta.type, "memory-reflection-event");
+      assert.equal(meta.usedFallback, true);
     });
   });
 
   describe("reflection slice loading", () => {
-    it("loads combined entries from both older and current metadata layouts", () => {
+    it("loads legacy combined rows for backward compatibility", () => {
       const now = Date.UTC(2026, 2, 7);
-
       const entries = [
         makeEntry({
           timestamp: now - 30 * 60 * 1000,
@@ -406,14 +523,11 @@ describe("memory reflection", () => {
 
       assert.ok(slices.invariants.includes("Legacy invariant still applies."));
       assert.ok(slices.invariants.includes("Current invariant applies too."));
-
       assert.ok(slices.derived.includes("Legacy derived delta still applies."));
       assert.ok(slices.derived.includes("Current derived delta still applies."));
     });
-  });
 
-  describe("derive logistic scoring", () => {
-    it("ranks recent derived guidance using logistic decay and fallback base-weight", () => {
+    it("prefers item rows when both item and legacy layouts exist", () => {
       const now = Date.UTC(2026, 2, 7);
       const day = 24 * 60 * 60 * 1000;
 
@@ -423,64 +537,230 @@ describe("memory reflection", () => {
           metadata: {
             type: "memory-reflection",
             agentId: "main",
-            derived: ["Fresh normal derive"],
+            invariants: ["Legacy invariant should not be selected when item rows exist."],
+            derived: ["Legacy derived should not be selected when item rows exist."],
             storedAt: now - 1 * day,
-            deriveBaseWeight: 1,
-            usedFallback: false,
-            reflectionVersion: 3,
           },
         }),
         makeEntry({
           timestamp: now - 1 * day,
           metadata: {
-            type: "memory-reflection",
+            type: "memory-reflection-item",
+            itemKind: "invariant",
             agentId: "main",
-            derived: ["Fresh fallback derive"],
             storedAt: now - 1 * day,
-            usedFallback: true,
-            reflectionVersion: 3,
+            decayMidpointDays: 45,
+            decayK: 0.22,
+            baseWeight: 1.1,
+            quality: 1,
           },
         }),
         makeEntry({
-          timestamp: now - 5 * day,
+          timestamp: now - 1 * day,
           metadata: {
-            type: "memory-reflection",
+            type: "memory-reflection-item",
+            itemKind: "derived",
             agentId: "main",
-            derived: ["Older normal derive"],
-            storedAt: now - 5 * day,
-            usedFallback: false,
-            reflectionVersion: 3,
-          },
-        }),
-        makeEntry({
-          timestamp: now - 2 * day,
-          metadata: {
-            type: "memory-reflection",
-            agentId: "main",
-            derived: ["Second recent derive signal"],
-            storedAt: now - 2 * day,
-            usedFallback: false,
+            storedAt: now - 1 * day,
+            decayMidpointDays: 7,
+            decayK: 0.65,
+            baseWeight: 1,
+            quality: 0.95,
           },
         }),
       ];
+
+      entries[1].text = "Always use itemized rows first.";
+      entries[2].text = "Next run prioritize itemized reflection rows.";
 
       const slices = loadAgentReflectionSlicesFromEntries({
         entries,
         agentId: "main",
         now,
-        deriveMaxAgeMs: 10 * day,
+        deriveMaxAgeMs: 7 * day,
       });
 
-      assert.equal(slices.derived[0], "Fresh normal derive");
-      assert.ok(slices.derived.includes("Second recent derive signal"));
+      assert.deepEqual(slices.invariants, ["Always use itemized rows first."]);
+      assert.deepEqual(slices.derived, ["Next run prioritize itemized reflection rows."]);
+    });
 
-      const fallbackIdx = slices.derived.indexOf("Fresh fallback derive");
-      const olderIdx = slices.derived.indexOf("Older normal derive");
-      assert.notEqual(fallbackIdx, -1);
-      assert.notEqual(olderIdx, -1);
-      assert.ok(fallbackIdx < olderIdx, "fallback should still rank above much older derive due recency, but below normal fresh derive");
+    it("aggregates duplicate item text and applies fallback penalty in derived ranking", () => {
+      const now = Date.UTC(2026, 2, 7);
+      const day = 24 * 60 * 60 * 1000;
 
-      assert.equal(REFLECTION_DERIVE_FALLBACK_BASE_WEIGHT, 0.35);
+      const entries = [
+        makeEntry({
+          timestamp: now - 1 * day,
+          metadata: {
+            type: "memory-reflection-item",
+            itemKind: "derived",
+            agentId: "main",
+            storedAt: now - 1 * day,
+            decayMidpointDays: 7,
+            decayK: 0.65,
+            baseWeight: 1,
+            quality: 1,
+            usedFallback: false,
+          },
+        }),
+        makeEntry({
+          timestamp: now - 2 * day,
+          metadata: {
+            type: "memory-reflection-item",
+            itemKind: "derived",
+            agentId: "main",
+            storedAt: now - 2 * day,
+            decayMidpointDays: 7,
+            decayK: 0.65,
+            baseWeight: 1,
+            quality: 1,
+            usedFallback: false,
+          },
+        }),
+        makeEntry({
+          timestamp: now - 1 * day,
+          metadata: {
+            type: "memory-reflection-item",
+            itemKind: "derived",
+            agentId: "main",
+            storedAt: now - 1 * day,
+            decayMidpointDays: 7,
+            decayK: 0.65,
+            baseWeight: 1,
+            quality: 1,
+            usedFallback: true,
+          },
+        }),
+      ];
+
+      entries[0].text = "Repeat verification path";
+      entries[1].text = "repeat   verification   path";
+      entries[2].text = "Fresh fallback derive";
+
+      const slices = loadAgentReflectionSlicesFromEntries({
+        entries,
+        agentId: "main",
+        now,
+        deriveMaxAgeMs: 7 * day,
+      });
+
+      assert.equal(slices.derived[0], "Repeat verification path");
+      assert.ok(slices.derived.includes("Fresh fallback derive"));
+      assert.equal(REFLECTION_FALLBACK_SCORE_FACTOR, 0.75);
+    });
+  });
+
+  describe("mapped reflection metadata and ranking", () => {
+    it("builds enriched mapped metadata with decay defaults and provenance", () => {
+      const metadata = buildReflectionMappedMetadata({
+        mappedItem: {
+          text: "User prefers terse incident updates.",
+          category: "preference",
+          heading: "User model deltas (about the human)",
+          mappedKind: "user-model",
+          ordinal: 0,
+          groupSize: 2,
+        },
+        eventId: "refl-20260307-abc123",
+        agentId: "main",
+        sessionKey: "agent:main:session:abc",
+        sessionId: "abc",
+        runAt: 1_741_356_000_000,
+        usedFallback: false,
+        toolErrorSignals: [{ signatureHash: "deadbeef1234abcd" }],
+        sourceReflectionPath: "memory/reflections/2026-03-07/test.md",
+      });
+
+      assert.equal(metadata.type, "memory-reflection-mapped");
+      assert.equal(metadata.reflectionVersion, 4);
+      assert.equal(metadata.eventId, "refl-20260307-abc123");
+      assert.equal(metadata.mappedKind, "user-model");
+      assert.equal(metadata.mappedCategory, "preference");
+      assert.equal(metadata.ordinal, 0);
+      assert.equal(metadata.groupSize, 2);
+      assert.equal(metadata.decayMidpointDays, 21);
+      assert.equal(metadata.decayK, 0.3);
+      assert.equal(metadata.baseWeight, 1);
+      assert.equal(metadata.quality, 0.95);
+      assert.deepEqual(metadata.errorSignals, ["deadbeef1234abcd"]);
+    });
+
+    it("loads mapped rows with decay-aware ranking and fallback penalty", () => {
+      const now = Date.UTC(2026, 2, 7);
+      const day = 24 * 60 * 60 * 1000;
+
+      const entries = [
+        makeEntry({
+          timestamp: now - 1 * day,
+          category: "preference",
+          metadata: {
+            type: "memory-reflection-mapped",
+            mappedKind: "user-model",
+            agentId: "main",
+            storedAt: now - 1 * day,
+            decayMidpointDays: 21,
+            decayK: 0.3,
+            baseWeight: 1,
+            quality: 1,
+            usedFallback: false,
+          },
+        }),
+        makeEntry({
+          timestamp: now - 1 * day,
+          category: "preference",
+          metadata: {
+            type: "memory-reflection-mapped",
+            mappedKind: "user-model",
+            agentId: "main",
+            storedAt: now - 1 * day,
+            decayMidpointDays: 21,
+            decayK: 0.3,
+            baseWeight: 1,
+            quality: 1,
+            usedFallback: true,
+          },
+        }),
+        makeEntry({
+          timestamp: now - 1 * day,
+          category: "decision",
+          metadata: {
+            type: "memory-reflection-mapped",
+            mappedKind: "decision",
+            agentId: "main",
+            storedAt: now - 1 * day,
+            decayMidpointDays: 45,
+            decayK: 0.25,
+            baseWeight: 1.1,
+            quality: 1,
+            usedFallback: false,
+          },
+        }),
+      ];
+      entries[0].text = "User likes concise status checkpoints.";
+      entries[1].text = "User likes fallback-generated status checkpoints.";
+      entries[2].text = "Keep decision logs with explicit UTC timestamps.";
+
+      const mapped = loadReflectionMappedRowsFromEntries({
+        entries,
+        agentId: "main",
+        now,
+        maxAgeMs: 14 * day,
+      });
+
+      assert.equal(mapped.userModel[0], "User likes concise status checkpoints.");
+      assert.ok(mapped.userModel.includes("User likes fallback-generated status checkpoints."));
+      assert.equal(mapped.decision[0], "Keep decision logs with explicit UTC timestamps.");
+    });
+
+    it("keeps ordinary display categories for mapped durable rows", () => {
+      assert.equal(
+        getDisplayCategoryTag({
+          category: "preference",
+          scope: "global",
+          metadata: JSON.stringify({ type: "memory-reflection-mapped", mappedKind: "user-model" }),
+        }),
+        "preference:global"
+      );
     });
   });
 
@@ -513,6 +793,26 @@ describe("memory reflection", () => {
     it("defaults to systemSessionMemory when neither field is set", () => {
       const parsed = parsePluginConfig(baseConfig());
       assert.equal(parsed.sessionStrategy, "systemSessionMemory");
+    });
+
+    it("defaults writeLegacyCombined=true for memoryReflection config", () => {
+      const parsed = parsePluginConfig({
+        ...baseConfig(),
+        sessionStrategy: "memoryReflection",
+        memoryReflection: {},
+      });
+      assert.equal(parsed.memoryReflection.writeLegacyCombined, true);
+    });
+
+    it("allows disabling legacy combined reflection writes", () => {
+      const parsed = parsePluginConfig({
+        ...baseConfig(),
+        sessionStrategy: "memoryReflection",
+        memoryReflection: {
+          writeLegacyCombined: false,
+        },
+      });
+      assert.equal(parsed.memoryReflection.writeLegacyCombined, false);
     });
   });
 });

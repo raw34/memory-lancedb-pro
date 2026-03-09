@@ -150,7 +150,7 @@ export class SmartExtractor {
     const result: string[] = [];
     for (const text of texts) {
       // Very short texts lack semantic signal — skip noise check to avoid false positives
-      if (text.length <= 20) {
+      if (text.length <= 8) {
         result.push(text);
         continue;
       }

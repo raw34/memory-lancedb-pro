@@ -612,6 +612,19 @@ Sometimes the model may echo the injected `<relevant-memories>` block.
 </details>
 
 <details>
+<summary><strong>Auto-recall timeout tuning</strong></summary>
+
+Auto-recall has a configurable timeout (default 5s) to prevent stalling agent startup. If you're behind a proxy or using a high-latency embedding API, increase it:
+
+```json
+{ "plugins": { "entries": { "memory-lancedb-pro": { "config": { "autoRecallTimeoutMs": 8000 } } } } }
+```
+
+If auto-recall consistently times out, check your embedding API latency first. The timeout only affects the automatic injection path — manual `memory_recall` tool calls are not affected.
+
+</details>
+
+<details>
 <summary><strong>Session Memory</strong></summary>
 
 - Triggered on `/new` command — saves previous session summary to LanceDB

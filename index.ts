@@ -24,6 +24,12 @@ import { appendSelfImprovementEntry, ensureSelfImprovementLearningFiles } from "
 import type { MdMirrorWriter } from "./src/tools.js";
 import { shouldSkipRetrieval } from "./src/adaptive-retrieval.js";
 import { parseClawteamScopes, applyClawteamScopes } from "./src/clawteam-scope.js";
+import {
+  runCompaction,
+  shouldRunCompaction,
+  recordCompactionRun,
+  type CompactionConfig,
+} from "./src/memory-compactor.js";
 import { runWithReflectionTransientRetryOnce } from "./src/reflection-retry.js";
 import { resolveReflectionSessionSearchDirs, stripResetSuffix } from "./src/session-recovery.js";
 import {
@@ -188,6 +194,14 @@ interface PluginConfig {
   mdMirror?: { enabled?: boolean; dir?: string };
   workspaceBoundary?: WorkspaceBoundaryConfig;
   admissionControl?: AdmissionControlConfig;
+  memoryCompaction?: {
+    enabled?: boolean;
+    minAgeDays?: number;
+    similarityThreshold?: number;
+    minClusterSize?: number;
+    maxMemoriesToScan?: number;
+    cooldownHours?: number;
+  };
 }
 
 type ReflectionThinkLevel = "off" | "minimal" | "low" | "medium" | "high";
@@ -1991,6 +2005,128 @@ const memoryLanceDBProPlugin = {
     );
 
     // ========================================================================
+    // Memory Compaction (Progressive Summarization)
+    // ========================================================================
+
+    if (config.enableManagementTools) {
+      api.registerTool({
+        name: "memory_compact",
+        description:
+          "Consolidate semantically similar old memories into refined single entries " +
+          "(progressive summarization). Reduces noise and improves retrieval quality over time. " +
+          "Use dry_run:true first to preview the compaction plan without making changes.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            dry_run: {
+              type: "boolean",
+              description: "Preview clusters without writing changes. Default: false.",
+            },
+            min_age_days: {
+              type: "number",
+              description: "Only compact memories at least this many days old. Default: 7.",
+            },
+            similarity_threshold: {
+              type: "number",
+              description: "Cosine similarity threshold for clustering [0-1]. Default: 0.88.",
+            },
+            scopes: {
+              type: "array",
+              items: { type: "string" },
+              description: "Scope filter. Omit to compact all scopes.",
+            },
+          },
+          required: [],
+        },
+        execute: async (args: Record<string, unknown>) => {
+          const compactionCfg: CompactionConfig = {
+            enabled: true,
+            minAgeDays:
+              typeof args.min_age_days === "number"
+                ? args.min_age_days
+                : (config.memoryCompaction?.minAgeDays ?? 7),
+            similarityThreshold:
+              typeof args.similarity_threshold === "number"
+                ? Math.max(0, Math.min(1, args.similarity_threshold))
+                : (config.memoryCompaction?.similarityThreshold ?? 0.88),
+            minClusterSize: config.memoryCompaction?.minClusterSize ?? 2,
+            maxMemoriesToScan: config.memoryCompaction?.maxMemoriesToScan ?? 200,
+            dryRun: args.dry_run === true,
+            cooldownHours: config.memoryCompaction?.cooldownHours ?? 24,
+          };
+          const scopes =
+            Array.isArray(args.scopes) && args.scopes.length > 0
+              ? (args.scopes as string[])
+              : undefined;
+
+          const result = await runCompaction(
+            store,
+            embedder,
+            compactionCfg,
+            scopes,
+            api.logger,
+          );
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    scanned: result.scanned,
+                    clustersFound: result.clustersFound,
+                    memoriesDeleted: result.memoriesDeleted,
+                    memoriesCreated: result.memoriesCreated,
+                    dryRun: result.dryRun,
+                    summary: result.dryRun
+                      ? `Dry run: found ${result.clustersFound} cluster(s) in ${result.scanned} memories — no changes made.`
+                      : `Compacted ${result.memoriesDeleted} memories into ${result.memoriesCreated} consolidated entries.`,
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        },
+      });
+    }
+
+    // Auto-compaction at gateway_start (if enabled, respects cooldown)
+    if (config.memoryCompaction?.enabled) {
+      api.on("gateway_start", () => {
+        const compactionStateFile = join(
+          dirname(resolvedDbPath),
+          ".compaction-state.json",
+        );
+        const compactionCfg: CompactionConfig = {
+          enabled: true,
+          minAgeDays: config.memoryCompaction!.minAgeDays ?? 7,
+          similarityThreshold: config.memoryCompaction!.similarityThreshold ?? 0.88,
+          minClusterSize: config.memoryCompaction!.minClusterSize ?? 2,
+          maxMemoriesToScan: config.memoryCompaction!.maxMemoriesToScan ?? 200,
+          dryRun: false,
+          cooldownHours: config.memoryCompaction!.cooldownHours ?? 24,
+        };
+
+        shouldRunCompaction(compactionStateFile, compactionCfg.cooldownHours)
+          .then(async (should) => {
+            if (!should) return;
+            await recordCompactionRun(compactionStateFile);
+            const result = await runCompaction(store, embedder, compactionCfg, undefined, api.logger);
+            if (result.clustersFound > 0) {
+              api.logger.info(
+                `memory-compactor [auto]: compacted ${result.memoriesDeleted} → ${result.memoriesCreated} entries`,
+              );
+            }
+          })
+          .catch((err) => {
+            api.logger.warn(`memory-compactor [auto]: failed: ${String(err)}`);
+          });
+      });
+    }
+
+    // ========================================================================
     // Register CLI Commands
     // ========================================================================
 
@@ -3669,6 +3805,24 @@ export function parsePluginConfig(value: unknown): PluginConfig {
         }
         : undefined,
     admissionControl: normalizeAdmissionControlConfig(cfg.admissionControl),
+    memoryCompaction: (() => {
+      const raw =
+        typeof cfg.memoryCompaction === "object" && cfg.memoryCompaction !== null
+          ? (cfg.memoryCompaction as Record<string, unknown>)
+          : null;
+      if (!raw) return undefined;
+      return {
+        enabled: raw.enabled === true,
+        minAgeDays: parsePositiveInt(raw.minAgeDays) ?? 7,
+        similarityThreshold:
+          typeof raw.similarityThreshold === "number"
+            ? Math.max(0, Math.min(1, raw.similarityThreshold))
+            : 0.88,
+        minClusterSize: parsePositiveInt(raw.minClusterSize) ?? 2,
+        maxMemoriesToScan: parsePositiveInt(raw.maxMemoriesToScan) ?? 200,
+        cooldownHours: parsePositiveInt(raw.cooldownHours) ?? 24,
+      };
+    })(),
   };
 }
 

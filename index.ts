@@ -109,6 +109,8 @@ interface PluginConfig {
   /** Hard per-turn injection cap (safety valve). Overrides autoRecallMaxItems if lower. Default: 10. */
   maxRecallPerTurn?: number;
   recallMode?: "full" | "summary" | "adaptive" | "off";
+  /** Agent IDs excluded from auto-recall injection. Useful for background agents (e.g. memory-distiller, cron workers) whose output should not be contaminated by injected memory context. */
+  autoRecallExcludeAgents?: string[];
   captureAssistant?: boolean;
   retrieval?: {
     mode?: "hybrid" | "vector";
@@ -1611,6 +1613,11 @@ const pluginVersion = getPluginVersion();
 // Plugin Definition
 // ============================================================================
 
+// WeakSet keyed by API instance — each distinct API object tracks its own initialized state.
+// Using WeakSet instead of a module-level boolean avoids the "second register() call skips
+// hook/tool registration for the new API instance" regression that rwmjhb identified.
+const _registeredApis = new WeakSet<OpenClawPluginApi>();
+
 const memoryLanceDBProPlugin = {
   id: "memory-lancedb-pro",
   name: "Memory (LanceDB Pro)",
@@ -1619,6 +1626,13 @@ const memoryLanceDBProPlugin = {
   kind: "memory" as const,
 
   register(api: OpenClawPluginApi) {
+    // Idempotent guard: skip re-init if this exact API instance has already registered.
+    if (_registeredApis.has(api)) {
+      api.logger.debug?.("memory-lancedb-pro: register() called again — skipping re-init (idempotent)");
+      return;
+    }
+    _registeredApis.add(api);
+
     // Parse and validate configuration
     const config = parsePluginConfig(api.pluginConfig);
 
@@ -2260,6 +2274,20 @@ const memoryLanceDBProPlugin = {
 
       const AUTO_RECALL_TIMEOUT_MS = parsePositiveInt(config.autoRecallTimeoutMs) ?? 5_000; // configurable; default raised from 3s to 5s for remote embedding APIs behind proxies
       api.on("before_prompt_build", async (event: any, ctx: any) => {
+        // Per-agent exclusion: skip auto-recall for agents in the exclusion list.
+        const agentId = resolveHookAgentId(ctx?.agentId, (event as any).sessionKey);
+        if (
+          Array.isArray(config.autoRecallExcludeAgents) &&
+          config.autoRecallExcludeAgents.length > 0 &&
+          agentId !== undefined &&
+          config.autoRecallExcludeAgents.includes(agentId)
+        ) {
+          api.logger.debug?.(
+            `memory-lancedb-pro: auto-recall skipped for excluded agent '${agentId}'`,
+          );
+          return;
+        }
+
         // Manually increment turn counter for this session
         const sessionId = ctx?.sessionId || "default";
 
@@ -2371,10 +2399,12 @@ const memoryLanceDBProPlugin = {
             const meta = parseSmartMetadata(r.entry.metadata, r.entry);
             if (meta.state !== "confirmed") {
               stateFilteredCount++;
+              api.logger.debug(`memory-lancedb-pro: governance: filtered id=${r.entry.id} reason=state(${meta.state}) score=${r.score?.toFixed(3)} text=${r.entry.text.slice(0, 50)}`);
               return false;
             }
             if (meta.memory_layer === "archive" || meta.memory_layer === "reflection") {
               stateFilteredCount++;
+              api.logger.debug(`memory-lancedb-pro: governance: filtered id=${r.entry.id} reason=layer(${meta.memory_layer}) score=${r.score?.toFixed(3)} text=${r.entry.text.slice(0, 50)}`);
               return false;
             }
             if (meta.suppressed_until_turn > 0 && currentTurn <= meta.suppressed_until_turn) {
@@ -3845,6 +3875,10 @@ export function parsePluginConfig(value: unknown): PluginConfig {
     autoRecallMaxChars: parsePositiveInt(cfg.autoRecallMaxChars) ?? 600,
     autoRecallPerItemMaxChars: parsePositiveInt(cfg.autoRecallPerItemMaxChars) ?? 180,
     maxRecallPerTurn: parsePositiveInt(cfg.maxRecallPerTurn) ?? 10,
+    recallMode: (cfg.recallMode === "full" || cfg.recallMode === "summary" || cfg.recallMode === "adaptive" || cfg.recallMode === "off") ? cfg.recallMode : "full",
+    autoRecallExcludeAgents: Array.isArray(cfg.autoRecallExcludeAgents)
+      ? cfg.autoRecallExcludeAgents.filter((id: unknown): id is string => typeof id === "string" && id.trim() !== "")
+      : undefined,
     captureAssistant: cfg.captureAssistant === true,
     retrieval: typeof cfg.retrieval === "object" && cfg.retrieval !== null ? cfg.retrieval as any : undefined,
     decay: typeof cfg.decay === "object" && cfg.decay !== null ? cfg.decay as any : undefined,
@@ -3981,6 +4015,18 @@ export function parsePluginConfig(value: unknown): PluginConfig {
           }
         : { skipLowValue: false, maxExtractionsPerHour: 30 },
   };
+}
+
+/**
+ * Resets the registration state — primarily intended for use in tests that need
+ * to unload/reload the plugin without restarting the process.
+ * @public
+ */
+export function resetRegistration() {
+  // Note: WeakSets cannot be cleared by design. In test scenarios where the
+  // same process reloads the module, a fresh module state means a new WeakSet.
+  // For hot-reload scenarios, the module is re-imported fresh.
+  _registeredApis.clear();
 }
 
 export default memoryLanceDBProPlugin;

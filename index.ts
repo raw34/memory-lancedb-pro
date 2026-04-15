@@ -2241,6 +2241,10 @@ const memoryLanceDBProPlugin = {
 
       const AUTO_RECALL_TIMEOUT_MS = parsePositiveInt(config.autoRecallTimeoutMs) ?? 5_000; // configurable; default raised from 3s to 5s for remote embedding APIs behind proxies
       api.on("before_prompt_build", async (event: any, ctx: any) => {
+        // Skip auto-recall for sub-agent sessions — their context comes from the parent.
+        const sessionKey = typeof ctx.sessionKey === "string" ? ctx.sessionKey : "";
+        if (sessionKey.includes(":subagent:")) return;
+
         // Per-agent exclusion: skip auto-recall for agents in the exclusion list.
         const agentId = resolveHookAgentId(ctx?.agentId, (event as any).sessionKey);
         if (
@@ -3131,6 +3135,8 @@ const memoryLanceDBProPlugin = {
 
       api.on("before_prompt_build", async (_event: any, ctx: any) => {
         const sessionKey = typeof ctx.sessionKey === "string" ? ctx.sessionKey : "";
+        // Skip reflection injection for sub-agent sessions.
+        if (sessionKey.includes(":subagent:")) return;
         if (isInternalReflectionSessionKey(sessionKey)) return;
         if (reflectionInjectMode !== "inheritance-only" && reflectionInjectMode !== "inheritance+derived") return;
         try {
@@ -3158,6 +3164,8 @@ const memoryLanceDBProPlugin = {
 
       api.on("before_prompt_build", async (_event: any, ctx: any) => {
         const sessionKey = typeof ctx.sessionKey === "string" ? ctx.sessionKey : "";
+        // Skip reflection injection for sub-agent sessions.
+        if (sessionKey.includes(":subagent:")) return;
         if (isInternalReflectionSessionKey(sessionKey)) return;
         const agentId = resolveHookAgentId(
           typeof ctx.agentId === "string" ? ctx.agentId : undefined,

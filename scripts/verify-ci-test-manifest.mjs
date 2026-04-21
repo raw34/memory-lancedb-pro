@@ -52,6 +52,8 @@ const EXPECTED_BASELINE = [
   { group: "core-regression", runner: "node", file: "test/embedder-cache.test.mjs" },
   // Issue #629 batch embedding fix
   { group: "llm-clients-and-auth", runner: "node", file: "test/embedder-ollama-batch-routing.test.mjs" },
+  // Tier 1 memory counter fix
+  { group: "core-regression", runner: "node", file: "test/tier1-counters.test.mjs", args: ["--test"] },
 ];
 
 function fail(message) {

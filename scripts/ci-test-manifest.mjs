@@ -57,6 +57,8 @@ export const CI_TEST_MANIFEST = [
   { group: "storage-and-schema", runner: "node", file: "test/bulk-store-edge-cases.test.mjs", args: ["--test"] },
   { group: "storage-and-schema", runner: "node", file: "test/smart-extractor-bulk-store.test.mjs", args: ["--test"] },
   { group: "storage-and-schema", runner: "node", file: "test/smart-extractor-bulk-store-edge-cases.test.mjs", args: ["--test"] },
+  // Tier 1 memory counter fix
+  { group: "core-regression", runner: "node", file: "test/tier1-counters.test.mjs", args: ["--test"] },
 ];
 
 export function getEntriesForGroup(group) {

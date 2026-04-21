@@ -129,13 +129,15 @@
         "type": "integer",
         "minimum": 0,
         "default": 86400000,
-        "description": "Tier 1: if a memory's last auto-recall injection was more than this many ms ago, its bad_recall_count is reset to 0 on the next injection. 0 disables decay. Default: 86400000 (24 hours)."
+        "$comment": "No maximum: 0 disables decay; very large values also effectively disable. Unlike sibling autoRecall* integers, this is a time window with no natural upper bound.",
+        "description": "If a memory's last auto-recall injection was more than this many ms ago, its bad_recall_count is reset to 0 on the next injection. 0 disables decay. Default: 86400000 (24 hours)."
       },
       "autoRecallSuppressionDurationMs": {
         "type": "integer",
         "minimum": 0,
         "default": 1800000,
-        "description": "Tier 1: when bad_recall_count reaches the suppression threshold, the memory is suppressed from auto-recall for this many ms from now. Default: 1800000 (30 minutes)."
+        "$comment": "No maximum: 0 effectively disables suppression; large values allow long quarantine windows.",
+        "description": "When bad_recall_count reaches the suppression threshold, the memory is suppressed from auto-recall for this many ms from now. Default: 1800000 (30 minutes)."
       },
       "autoRecallTimeoutMs": {
         "type": "integer",

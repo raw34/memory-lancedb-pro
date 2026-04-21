@@ -2514,7 +2514,9 @@ const memoryLanceDBProPlugin = {
               api.logger.debug(`memory-lancedb-pro: governance: filtered id=${r.entry.id} reason=layer(${meta.memory_layer}) score=${r.score?.toFixed(3)} text=${r.entry.text.slice(0, 50)}`);
               return false;
             }
-            if (meta.suppressed_until_turn > 0 && currentTurn <= meta.suppressed_until_turn) {
+            const nowMs = Date.now();
+            const suppressUntil = meta.suppressed_until_ms ?? 0;
+            if (suppressUntil > 0 && nowMs < suppressUntil) {
               suppressedFilteredCount++;
               return false;
             }

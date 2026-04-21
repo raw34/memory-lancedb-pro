@@ -2668,6 +2668,9 @@ const memoryLanceDBProPlugin = {
                 typeof meta.last_injected_at === "number"
                   ? injectedAt - meta.last_injected_at
                   : Infinity;
+              // Negative gap (clock skew, e.g. NTP resync) falls through the
+              // `gap > badRecallDecayMs` check as "no decay" — conservative:
+              // never falsely reset due to apparent time travel.
               const decayedBadRecall =
                 badRecallDecayMs > 0 && gapSinceLastInjection > badRecallDecayMs
                   ? 0

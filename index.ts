@@ -2640,9 +2640,42 @@ const memoryLanceDBProPlugin = {
           }
 
           const injectedAt = Date.now();
+          const badRecallDecayMs =
+            config.autoRecallBadRecallDecayMs ?? 86_400_000;
+          const suppressionDurationMs =
+            config.autoRecallSuppressionDurationMs ?? 1_800_000;
           await Promise.allSettled(
             selected.map(async (item) => {
               const meta = item.meta;
+
+              // Tier 1 lazy heal: a memory has never been touched by Tier 1
+              // code if `suppressed_until_ms` is undefined. If such a memory
+              // still carries legacy pollution, reset the counters before new
+              // logic runs so it starts fresh.
+              let baseBadRecall = meta.bad_recall_count;
+              if (
+                meta.suppressed_until_ms === undefined &&
+                (meta.bad_recall_count > 0 || meta.suppressed_until_turn > 0)
+              ) {
+                baseBadRecall = 0;
+              }
+
+              // Tier 1 Option C: decay by gap. If the last injection was
+              // longer than the decay window ago, reset bad_recall_count
+              // before the stale-injection increment — "this memory is being
+              // needed again".
+              const gapSinceLastInjection =
+                typeof meta.last_injected_at === "number"
+                  ? injectedAt - meta.last_injected_at
+                  : Infinity;
+              const decayedBadRecall =
+                badRecallDecayMs > 0 && gapSinceLastInjection > badRecallDecayMs
+                  ? 0
+                  : baseBadRecall;
+
+              // Existing staleInjected judgment preserved verbatim — Tier 1
+              // does NOT change how "was this injection confirmed" is
+              // determined (PR #597 / Proposal A owns that).
               const staleInjected =
                 typeof meta.last_injected_at === "number" &&
                 meta.last_injected_at > 0 &&
@@ -2651,18 +2684,33 @@ const memoryLanceDBProPlugin = {
                   meta.last_confirmed_use_at < meta.last_injected_at
                 );
               const nextBadRecallCount = staleInjected
-                ? meta.bad_recall_count + 1
-                : meta.bad_recall_count;
+                ? decayedBadRecall + 1
+                : decayedBadRecall;
               const shouldSuppress = nextBadRecallCount >= 3 && minRepeated > 0;
+
               await store.patchMetadata(
                 item.id,
                 {
+                  // Tier 1 additions
+                  access_count: meta.access_count + 1,
+                  last_accessed_at: injectedAt,
+
+                  // Existing fields (semantics unchanged)
                   injected_count: meta.injected_count + 1,
                   last_injected_at: injectedAt,
                   bad_recall_count: nextBadRecallCount,
-                  suppressed_until_turn: shouldSuppress
-                    ? Math.max(meta.suppressed_until_turn, currentTurn + minRepeated)
-                    : meta.suppressed_until_turn,
+
+                  // Tier 1 ms-based suppression
+                  suppressed_until_ms: shouldSuppress
+                    ? Math.max(
+                        meta.suppressed_until_ms ?? 0,
+                        injectedAt + suppressionDurationMs,
+                      )
+                    : (meta.suppressed_until_ms ?? 0),
+
+                  // Legacy cleanup — always zero out the turn field on any
+                  // Tier-1-era patch so stale numbers cannot leak through.
+                  suppressed_until_turn: 0,
                 },
                 accessibleScopes,
               );

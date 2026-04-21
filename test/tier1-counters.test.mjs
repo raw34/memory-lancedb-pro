@@ -26,11 +26,17 @@ describe("Tier 1: suppressed_until_ms field presence semantics", () => {
   });
 
   it("coerces negative or NaN to 0", () => {
-    const meta = parseSmartMetadata(
+    const negMeta = parseSmartMetadata(
       JSON.stringify({ l0_abstract: "x", suppressed_until_ms: -100 }),
       { text: "x", category: "fact" },
     );
-    assert.equal(meta.suppressed_until_ms, 0);
+    assert.equal(negMeta.suppressed_until_ms, 0);
+
+    const nanMeta = parseSmartMetadata(
+      JSON.stringify({ l0_abstract: "x", suppressed_until_ms: "not-a-number" }),
+      { text: "x", category: "fact" },
+    );
+    assert.equal(nanMeta.suppressed_until_ms, 0);
   });
 
   it("preserves 0 explicitly (not coerced to undefined)", () => {

@@ -337,6 +337,11 @@ export function parseSmartMetadata(
     last_confirmed_use_at: normalizeOptionalTimestamp(parsed.last_confirmed_use_at),
     bad_recall_count: clampCount(parsed.bad_recall_count, 0),
     suppressed_until_turn: clampCount(parsed.suppressed_until_turn, 0),
+    // DO NOT replace with `clampCount(parsed.suppressed_until_ms, 0)` directly —
+    // preserving `undefined` is load-bearing for the Tier 1 lazy-heal sentinel
+    // (see JSDoc on SmartMemoryMetadata.suppressed_until_ms). The `undefined`
+    // signal distinguishes "never touched by Tier 1 code" from "Tier 1 touched
+    // but no active suppression (0)".
     suppressed_until_ms:
       parsed.suppressed_until_ms !== undefined
         ? clampCount(parsed.suppressed_until_ms, 0)

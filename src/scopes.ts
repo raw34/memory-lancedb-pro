@@ -129,15 +129,17 @@ function normalizeAgentAccessMap(
  * Used by isAccessible to decide between equality and pattern match.
  */
 export function isWildcardPattern(s: string): boolean {
-  return typeof s === "string" && s.includes("*");
+  return typeof s === "string" && s.endsWith("*");
 }
 
 /**
  * Match a scope string against a pattern.
  * - Plain literals: strict string equality.
- * - Trailing `*`: prefix match (the prefix portion is matched literally, regex
- *   metachars are escaped). Only ONE trailing `*` is recognised — mid-segment
- *   `*` is treated as a literal character.
+ * - Trailing `*`: prefix match using String.prototype.startsWith — the prefix
+ *   portion is compared as a literal byte sequence, so regex metachars (`.`,
+ *   `+`, `?`, etc.) are matched as themselves with no escaping needed.
+ *   Only ONE trailing `*` is recognised — mid-segment `*` is treated as a
+ *   literal character.
  *
  * Examples:
  *   matchesScopePattern("a:b:c", "a:b:*") === true

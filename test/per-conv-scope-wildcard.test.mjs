@@ -6,13 +6,16 @@ const jiti = jitiFactory(import.meta.url, { interopDefault: true });
 const { matchesScopePattern, isWildcardPattern } = jiti("../src/scopes.ts");
 
 describe("isWildcardPattern", () => {
-  it("returns true for strings containing *", () => {
+  it("returns true for strings ending with *", () => {
     assert.equal(isWildcardPattern("agent:bs:conv:*"), true);
     assert.equal(isWildcardPattern("*"), true);
   });
   it("returns false for plain literals", () => {
     assert.equal(isWildcardPattern("global"), false);
     assert.equal(isWildcardPattern("agent:bs:conv:discord:456"), false);
+  });
+  it("returns false for mid-segment * (not a real wildcard)", () => {
+    assert.equal(isWildcardPattern("a*b"), false);
   });
 });
 
@@ -34,7 +37,7 @@ describe("matchesScopePattern", () => {
     assert.equal(matchesScopePattern("a:b:c:d", "*"), true);
     assert.equal(matchesScopePattern("", "*"), false);
   });
-  it("escapes regex metachars in literal portion", () => {
+  it("treats regex metachars in literal portion as literal characters", () => {
     assert.equal(matchesScopePattern("a.b", "a.b"), true);
     assert.equal(matchesScopePattern("aXb", "a.b"), false);  // . is literal not regex .
     assert.equal(matchesScopePattern("a+b", "a+b"), true);
@@ -43,5 +46,18 @@ describe("matchesScopePattern", () => {
     // mid-segment '*' is treated as literal '*' character (not wildcard)
     assert.equal(matchesScopePattern("a*b", "a*b"), true);
     assert.equal(matchesScopePattern("aXb", "a*b"), false);
+  });
+});
+
+describe("non-string input handling", () => {
+  it("matchesScopePattern returns false for non-string inputs", () => {
+    assert.equal(matchesScopePattern(undefined, "global"), false);
+    assert.equal(matchesScopePattern("global", null), false);
+    assert.equal(matchesScopePattern(123, "*"), false);
+  });
+  it("isWildcardPattern returns false for non-string inputs", () => {
+    assert.equal(isWildcardPattern(null), false);
+    assert.equal(isWildcardPattern(undefined), false);
+    assert.equal(isWildcardPattern(123), false);
   });
 });

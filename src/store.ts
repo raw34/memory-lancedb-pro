@@ -101,6 +101,78 @@ function escapeSqlLiteral(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+/**
+ * Escape SQL LIKE meta-characters (_ % \) in a literal portion of a pattern.
+ * The result must be paired with `ESCAPE '\\\\'` clause when used in SQL LIKE.
+ * LanceDB uses backslash escape sequences inside SQL string literals, so each
+ * backslash must be doubled (1 backslash → 2 backslashes) and each LIKE
+ * metachar (_, %) is prefixed with two backslashes (SQL string "\\\\x" →
+ * SQL pattern "\\x" with escape char "\\" → literal x).
+ */
+export function escapeSqlLikePattern(value: string): string {
+  return value.replace(/[\\_%]/g, (m) => (m === "\\" ? "\\\\" : "\\\\" + m));
+}
+
+/**
+ * Build a SQL WHERE-condition string for a scope filter.
+ *
+ * - undefined  → undefined (caller omits WHERE clause; system bypass semantics)
+ * - []         → "'1' = '0'" (explicit deny-all)
+ * - all literals → uses scope = '...' OR-joined (no LIKE; perf parity with old code)
+ * - any wildcard → wildcard entries become LIKE 'prefix%' ESCAPE '\\'
+ *
+ * Caller must combine with ` OR scope IS NULL` if NULL-tolerance is needed
+ * (the old scope filter block did this for backward compatibility).
+ */
+export function scopeFilterToSqlCondition(filter?: string[]): string | undefined {
+  if (filter === undefined) return undefined;
+  if (filter.length === 0) return "'1' = '0'";
+
+  const parts: string[] = [];
+  for (const raw of filter) {
+    if (typeof raw !== "string" || raw.length === 0) continue;
+    if (raw.includes("*")) {
+      // Wildcard: take everything before trailing *, escape LIKE metachars,
+      // append SQL wildcard %
+      const prefix = raw.endsWith("*") ? raw.slice(0, -1) : raw;
+      const escaped = escapeSqlLiteral(escapeSqlLikePattern(prefix));
+      parts.push(`scope LIKE '${escaped}%' ESCAPE '\\\\'`);
+    } else {
+      parts.push(`scope = '${escapeSqlLiteral(raw)}'`);
+    }
+  }
+
+  if (parts.length === 0) return "'1' = '0'";
+  if (parts.length === 1) return parts[0];
+  return `(${parts.join(" OR ")})`;
+}
+
+/**
+ * Application-layer equivalent of scopeFilterToSqlCondition.
+ * Used by post-fetch verification inside vectorSearch / bm25Search and by
+ * tests that compare app-layer to SQL-layer semantics.
+ */
+export function scopeFilterIncludes(
+  filter: string[] | undefined,
+  scope: string,
+): boolean {
+  if (filter === undefined) return true;
+  if (filter.length === 0) return false;
+
+  for (const raw of filter) {
+    if (typeof raw !== "string" || raw.length === 0) continue;
+    if (raw.includes("*")) {
+      const prefix = raw.endsWith("*") ? raw.slice(0, -1) : raw;
+      if (prefix.length === 0 ? scope.length > 0 : scope.startsWith(prefix)) {
+        return true;
+      }
+    } else {
+      if (scope === raw) return true;
+    }
+  }
+  return false;
+}
+
 function normalizeSearchText(value: string): string {
   return value.toLowerCase().trim();
 }

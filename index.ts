@@ -4020,9 +4020,13 @@ const memoryLanceDBProPlugin = {
             typeof ctx.agentId === "string" ? ctx.agentId : undefined,
             sessionKey,
           );
-          const defaultScope = isSystemBypassId(agentId)
-            ? config.scopes?.default ?? "global"
-            : scopeManager.getDefaultScope(agentId);
+          const defaultScope = resolveHookDefaultScope({
+            scopeManager,
+            agentId,
+            sessionKey,
+            configDefault: config.scopes?.default,
+            logger: api.logger,
+          });
           const currentSessionId =
             typeof ctx.sessionId === "string" && ctx.sessionId.trim().length > 0
               ? ctx.sessionId

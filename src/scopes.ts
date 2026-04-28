@@ -292,7 +292,11 @@ export class MemoryScopeManager implements ScopeManager {
     }
 
     const accessibleScopes = this.getAccessibleScopes(agentId);
-    return accessibleScopes.includes(scope);
+    // Wildcard-aware: literal entries use equality, '*' entries use pattern match
+    for (const accessible of accessibleScopes) {
+      if (matchesScopePattern(scope, accessible)) return true;
+    }
+    return false;
   }
 
   validateScope(scope: string): boolean {
@@ -385,20 +389,19 @@ export class MemoryScopeManager implements ScopeManager {
   }
 
   private validateScopeFormat(scope: string): boolean {
-    if (!scope || typeof scope !== "string") {
-      return false;
-    }
-
+    if (!scope || typeof scope !== "string") return false;
     const trimmed = scope.trim();
+    if (trimmed.length === 0 || trimmed.length > 100) return false;
 
-    // Basic format validation
-    if (trimmed.length === 0 || trimmed.length > 100) {
-      return false;
-    }
+    // Allow alphanumeric, hyphens, underscores, colons, dots, and a single
+    // trailing '*' (wildcard). Mid-segment '*' is rejected. '*' alone is allowed.
+    const validFormat = /^([a-zA-Z0-9._:-]+\*?|\*)$/.test(trimmed);
+    if (!validFormat) return false;
 
-    // Allow alphanumeric, hyphens, underscores, colons, and dots
-    const validFormat = /^[a-zA-Z0-9._:-]+$/.test(trimmed);
-    return validFormat;
+    // Reject patterns containing more than one '*'
+    if ((trimmed.match(/\*/g) ?? []).length > 1) return false;
+
+    return true;
   }
 
   // Export/Import configuration

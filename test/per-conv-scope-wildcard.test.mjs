@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import jitiFactory from "jiti";
 
 const jiti = jitiFactory(import.meta.url, { interopDefault: true });
-const { matchesScopePattern, isWildcardPattern } = jiti("../src/scopes.ts");
+const { matchesScopePattern, isWildcardPattern, MemoryScopeManager } = jiti("../src/scopes.ts");
 
 describe("isWildcardPattern", () => {
   it("returns true for strings ending with *", () => {
@@ -59,5 +59,50 @@ describe("non-string input handling", () => {
     assert.equal(isWildcardPattern(null), false);
     assert.equal(isWildcardPattern(undefined), false);
     assert.equal(isWildcardPattern(123), false);
+  });
+});
+
+describe("MemoryScopeManager.isAccessible with wildcard agentAccess", () => {
+  const mgr = new MemoryScopeManager({
+    default: "global",
+    definitions: { global: { description: "" } },
+    agentAccess: {
+      "monitor": ["global", "agent:bs:conv:*"],
+    },
+  });
+
+  it("agent with wildcard ACL can access matching scope", () => {
+    assert.equal(mgr.isAccessible("agent:bs:conv:discord:456", "monitor"), true);
+    assert.equal(mgr.isAccessible("agent:bs:conv:other", "monitor"), true);
+  });
+  it("agent with wildcard ACL cannot access non-matching scope", () => {
+    assert.equal(mgr.isAccessible("agent:other:conv:x", "monitor"), false);
+    assert.equal(mgr.isAccessible("agent:bs", "monitor"), false);  // missing :conv: suffix
+  });
+  it("agent with literal ACL keeps strict equality", () => {
+    const m = new MemoryScopeManager({
+      default: "global",
+      definitions: { global: { description: "" } },
+      agentAccess: { "x": ["global", "agent:y"] },
+    });
+    assert.equal(m.isAccessible("agent:y", "x"), true);
+    assert.equal(m.isAccessible("agent:y:z", "x"), false);
+  });
+});
+
+describe("validateScopeFormat allows trailing *", () => {
+  const mgr = new MemoryScopeManager();
+  // We exercise validateScopeFormat indirectly via addScopeDefinition (which calls it)
+  it("accepts 'agent:bs:conv:*' as valid pattern", () => {
+    assert.doesNotThrow(() => mgr.addScopeDefinition("agent:bs:conv:*", { description: "" }));
+  });
+  it("accepts plain '*' as valid pattern", () => {
+    assert.doesNotThrow(() => mgr.addScopeDefinition("*", { description: "" }));
+  });
+  it("rejects mid-segment wildcards like 'a*b'", () => {
+    assert.throws(() => mgr.addScopeDefinition("a*b", { description: "" }), /Invalid scope format/);
+  });
+  it("rejects multiple wildcards like 'a:*:b:*'", () => {
+    assert.throws(() => mgr.addScopeDefinition("a:*:b:*", { description: "" }), /Invalid scope format/);
   });
 });

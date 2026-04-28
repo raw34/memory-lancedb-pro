@@ -143,6 +143,64 @@ export function resolveTemplate(
   return result;
 }
 
+/** Regex matching the valid scope format (mirrors MemoryScopeManager#validateScopeFormat). */
+const SCOPE_FORMAT_RE = /^([a-zA-Z0-9._:-]+\*?|\*)$/;
+
+/**
+ * Hook-layer entry point for write-target scope resolution.
+ *
+ * - For system bypass agents → "global" (fix for PR #568 review item 2:
+ *   never call scopeManager.getDefaultScope on bypass agents).
+ * - For empty/undefined configDefault → "global"
+ * - For static (non-template) configDefault → returned as-is if valid, else "global"
+ * - For template configDefault → substitute and return; on resolution failure → "global"
+ *
+ * This function never throws. Failures degrade to "global" + a warn log.
+ */
+export function resolveHookDefaultScope(params: {
+  scopeManager: ReturnType<typeof createScopeManager>;
+  agentId: string | undefined;
+  sessionKey: string | undefined;
+  configDefault: string | undefined;
+  logger?: { warn?: (msg: string) => void; debug?: (msg: string) => void };
+}): string {
+  const { agentId, sessionKey, configDefault, logger } = params;
+  const FALLBACK = "global";
+
+  // System bypass — do NOT call getDefaultScope (it throws for bypass IDs)
+  if (!agentId || isSystemBypassId(agentId)) {
+    logger?.debug?.(
+      `resolveHookDefaultScope: bypass agent (${agentId ?? "undefined"}) → fallback "${FALLBACK}"`,
+    );
+    return FALLBACK;
+  }
+
+  if (!configDefault || typeof configDefault !== "string") {
+    return FALLBACK;
+  }
+
+  const convKey = extractConvKey(sessionKey, agentId);
+  const resolved = resolveTemplate(configDefault, { agentId, convKey });
+  if (resolved === null) {
+    logger?.warn?.(
+      `resolveHookDefaultScope: template resolution failed for "${configDefault}" ` +
+        `(agentId=${agentId}, convKey=${convKey || "<empty>"}) → fallback "${FALLBACK}"`,
+    );
+    return FALLBACK;
+  }
+
+  // Validate resolved scope: format check first (rejects injection chars),
+  // then scope-manager structural check.
+  if (!SCOPE_FORMAT_RE.test(resolved) || !params.scopeManager.validateScope(resolved)) {
+    logger?.warn?.(
+      `resolveHookDefaultScope: resolved scope "${resolved}" failed validation → fallback "${FALLBACK}"`,
+    );
+    return FALLBACK;
+  }
+
+  return resolved;
+}
+
 // ============================================================================
 // Configuration & Types
 // ============================================================================

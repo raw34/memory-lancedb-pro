@@ -2,7 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import jitiFactory from "jiti";
 const jiti = jitiFactory(import.meta.url, { interopDefault: true });
-const { extractConvKey, resolveTemplate } = jiti("../index.ts");
+const { extractConvKey, resolveTemplate, resolveHookDefaultScope } = jiti("../index.ts");
+const { createScopeManager } = jiti("../src/scopes.ts");
 
 describe("extractConvKey", () => {
   it("extracts suffix after agent:<id>: from Discord channel sessionKey", () => {
@@ -77,5 +78,82 @@ describe("resolveTemplate", () => {
       resolveTemplate("conv:${convKey}", { agentId: "bs", convKey: "" }),
       null
     );
+  });
+});
+
+const mgr = createScopeManager({
+  definitions: { global: { description: "" } },
+});
+
+describe("resolveHookDefaultScope", () => {
+  it("resolves template successfully for normal agent + sessionKey", () => {
+    const result = resolveHookDefaultScope({
+      scopeManager: mgr,
+      agentId: "bs",
+      sessionKey: "agent:bs:discord:channel:456",
+      configDefault: "agent:${agentId}:conv:${convKey}",
+    });
+    assert.equal(result, "agent:bs:conv:discord:channel:456");
+  });
+
+  it("falls back to 'global' when system bypass agentId", () => {
+    const result = resolveHookDefaultScope({
+      scopeManager: mgr,
+      agentId: "system",
+      sessionKey: "agent:system:foo",
+      configDefault: "agent:${agentId}:conv:${convKey}",
+    });
+    assert.equal(result, "global");
+  });
+
+  it("falls back to 'global' when sessionKey has no convKey suffix", () => {
+    const result = resolveHookDefaultScope({
+      scopeManager: mgr,
+      agentId: "bs",
+      sessionKey: "agent:bs",
+      configDefault: "agent:${agentId}:conv:${convKey}",
+    });
+    assert.equal(result, "global");
+  });
+
+  it("falls back to 'global' when template has unknown variable", () => {
+    const result = resolveHookDefaultScope({
+      scopeManager: mgr,
+      agentId: "bs",
+      sessionKey: "agent:bs:x:y",
+      configDefault: "agent:${unknownVar}",
+    });
+    assert.equal(result, "global");
+  });
+
+  it("returns static value unchanged when no template", () => {
+    const result = resolveHookDefaultScope({
+      scopeManager: mgr,
+      agentId: "bs",
+      sessionKey: "agent:bs:x",
+      configDefault: "global",
+    });
+    assert.equal(result, "global");
+  });
+
+  it("returns 'global' when configDefault is undefined or empty", () => {
+    const result = resolveHookDefaultScope({
+      scopeManager: mgr,
+      agentId: "bs",
+      sessionKey: "agent:bs:x",
+      configDefault: undefined,
+    });
+    assert.equal(result, "global");
+  });
+
+  it("falls back to 'global' when resolved scope fails validateScope (e.g., contains single-quote)", () => {
+    // Single-quote (and other invalid chars) rejected by validateScopeFormat
+    const result = resolveHookDefaultScope({
+      scopeManager: mgr,
+      agentId: "bs'inject",
+      sessionKey: "agent:bs'inject:x",
+      configDefault: "agent:${agentId}:conv:${convKey}",
+    });
+    assert.equal(result, "global");
   });
 });

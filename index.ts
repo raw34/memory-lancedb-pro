@@ -84,6 +84,66 @@ import {
 import { analyzeIntent, applyCategoryBoost } from "./src/intent-analyzer.js";
 
 // ============================================================================
+// Per-Conversation Scope Template Resolution (PR #555 / #568 Plan B)
+// ============================================================================
+
+/**
+ * Extract the convKey from a sessionKey by stripping the leading "agent:<id>:" prefix.
+ * Returns "" when the sessionKey is bare or doesn't start with the expected prefix.
+ *
+ * Examples:
+ *   extractConvKey("agent:bs:discord:channel:456", "bs") === "discord:channel:456"
+ *   extractConvKey("agent:bs", "bs")                     === ""
+ *   extractConvKey("other:bs", "bs")                     === ""
+ */
+export function extractConvKey(
+  sessionKey: string | undefined,
+  agentId: string | undefined,
+): string {
+  if (typeof sessionKey !== "string" || !sessionKey) return "";
+  if (typeof agentId !== "string" || !agentId) return "";
+  const prefix = `agent:${agentId}:`;
+  if (!sessionKey.startsWith(prefix)) return "";
+  return sessionKey.slice(prefix.length);
+}
+
+/**
+ * Substitute ${agentId} and ${convKey} in a template string.
+ * Returns null when:
+ *   - the template references an unknown variable
+ *   - the template references ${convKey} but convKey is empty (cannot resolve)
+ *
+ * Templates without any ${...} pattern short-circuit to identity (fast path).
+ */
+export function resolveTemplate(
+  template: string,
+  ctx: { agentId: string; convKey: string },
+): string | null {
+  if (typeof template !== "string") return null;
+  if (!template.includes("${")) return template;  // fast path
+
+  const KNOWN_VARS = new Set(["agentId", "convKey"]);
+  let unknown = false;
+  let unresolved = false;
+
+  const result = template.replace(/\$\{([^}]+)\}/g, (_, varName) => {
+    if (!KNOWN_VARS.has(varName)) {
+      unknown = true;
+      return "";
+    }
+    const v = (ctx as Record<string, string>)[varName];
+    if (typeof v !== "string" || v.length === 0) {
+      unresolved = true;
+      return "";
+    }
+    return v;
+  });
+
+  if (unknown || unresolved) return null;
+  return result;
+}
+
+// ============================================================================
 // Configuration & Types
 // ============================================================================
 

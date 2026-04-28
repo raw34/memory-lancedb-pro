@@ -55,6 +55,14 @@ export const CI_TEST_MANIFEST = [
   // Issue #665 bulkStore tests
   // Tier 1 memory counter fix
   { group: "core-regression", runner: "node", file: "test/tier1-counters.test.mjs", args: ["--test"] },
+  // Per-conversation scope isolation (#555 / #568 Plan B)
+  { group: "core-regression", runner: "node", file: "test/per-conv-scope-wildcard.test.mjs", args: ["--test"] },
+  { group: "core-regression", runner: "node", file: "test/per-conv-scope-template.test.mjs", args: ["--test"] },
+  { group: "core-regression", runner: "node", file: "test/per-conv-scope-sql-filter.test.mjs", args: ["--test"] },
+  { group: "storage-and-schema", runner: "node", file: "test/per-conv-scope-sql-equivalence.test.mjs", args: ["--test"] },
+  { group: "core-regression", runner: "node", file: "test/per-conv-scope-hook-integration.test.mjs", args: ["--test"] },
+  { group: "core-regression", runner: "node", file: "test/per-conv-scope-backward-compat.test.mjs", args: ["--test"] },
+  { group: "storage-and-schema", runner: "node", file: "test/migrate-legacy-scope.test.mjs", args: ["--test"] },
 ];
 
 export function getEntriesForGroup(group) {

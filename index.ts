@@ -144,16 +144,34 @@ export function resolveTemplate(
 }
 
 
+// Resolve a template string and validate the result. Returns null on any failure,
+// calling onFail with a reason string so the caller can log and apply its own fallback.
+function resolveValidateTemplate(
+  template: string,
+  ctx: { agentId: string; convKey: string },
+  scopeManager: ReturnType<typeof createScopeManager>,
+  onFail: (reason: string) => void,
+): string | null {
+  const resolved = resolveTemplate(template, ctx);
+  if (resolved === null) {
+    onFail(`template resolution failed for "${template}" (agentId=${ctx.agentId}, convKey=${ctx.convKey || "<empty>"})`);
+    return null;
+  }
+  if (!validateScopeFormat(resolved) || !scopeManager.validateScope(resolved)) {
+    onFail(`resolved scope "${resolved}" failed validation`);
+    return null;
+  }
+  return resolved;
+}
+
 /**
  * Hook-layer entry point for write-target scope resolution.
  *
- * - For system bypass agents → "global" (fix for PR #568 review item 2:
- *   never call scopeManager.getDefaultScope on bypass agents).
- * - For empty/undefined/non-template configDefault → scopeManager.getDefaultScope(agentId) (agent private scope or config.default)
- * - For template configDefault (contains "${") → substitute and return; on resolution/validation failure → "global"
- * - For template configDefault → substitute and return; on resolution failure → "global"
+ * - System bypass agents → "global" (never calls getDefaultScope on bypass IDs)
+ * - Non-template configDefault → scopeManager.getDefaultScope(agentId) (preserves existing behaviour)
+ * - Template configDefault → substitute and validate; on failure → "global"
  *
- * This function never throws. Failures degrade to "global" + a warn log.
+ * Never throws. Failures degrade to "global" + a warn log.
  */
 export function resolveHookDefaultScope(params: {
   scopeManager: ReturnType<typeof createScopeManager>;
@@ -165,42 +183,23 @@ export function resolveHookDefaultScope(params: {
   const { agentId, sessionKey, configDefault, logger } = params;
   const FALLBACK = "global";
 
-  // System bypass — do NOT call getDefaultScope (it throws for bypass IDs)
   if (!agentId || isSystemBypassId(agentId)) {
-    logger?.debug?.(
-      `resolveHookDefaultScope: bypass agent (${agentId ?? "undefined"}) → fallback "${FALLBACK}"`,
-    );
+    logger?.debug?.(`resolveHookDefaultScope: bypass agent (${agentId ?? "undefined"}) → "${FALLBACK}"`);
     return FALLBACK;
   }
 
-  if (!configDefault || typeof configDefault !== "string" || !configDefault.includes("${")) {
-    // No template — delegate to scopeManager which returns the agent's private scope
-    // ("agent:<id>") when available, falling back to config.default.  Static configDefault
-    // values (e.g. "global") are NOT treated as overrides — the scope manager already
-    // incorporates config.default internally via getDefaultScope.
+  if (!configDefault || !configDefault.includes("${")) {
     return params.scopeManager.getDefaultScope(agentId);
   }
 
   const convKey = extractConvKey(sessionKey, agentId);
-  const resolved = resolveTemplate(configDefault, { agentId, convKey });
-  if (resolved === null) {
-    logger?.warn?.(
-      `resolveHookDefaultScope: template resolution failed for "${configDefault}" ` +
-        `(agentId=${agentId}, convKey=${convKey || "<empty>"}) → fallback "${FALLBACK}"`,
-    );
-    return FALLBACK;
-  }
-
-  // Validate resolved scope: format check first (rejects injection chars),
-  // then scope-manager structural check.
-  if (!validateScopeFormat(resolved) || !params.scopeManager.validateScope(resolved)) {
-    logger?.warn?.(
-      `resolveHookDefaultScope: resolved scope "${resolved}" failed validation → fallback "${FALLBACK}"`,
-    );
-    return FALLBACK;
-  }
-
-  return resolved;
+  const resolved = resolveValidateTemplate(
+    configDefault,
+    { agentId, convKey },
+    params.scopeManager,
+    (reason) => logger?.warn?.(`resolveHookDefaultScope: ${reason} → fallback "${FALLBACK}"`),
+  );
+  return resolved ?? FALLBACK;
 }
 
 /**
@@ -256,24 +255,18 @@ export function resolveHookReadScopes(params: {
     return resolved;
   }
 
-  // Implicit case (no agentAccess[agentId] configured):
-  // - Template configDefault → [global, resolvedTemplate, reflection]
-  // - Static (non-template) configDefault → defer to scopeManager.getAccessibleScopes
-  //   to preserve existing semantics (which include agent:<id> private scope)
-  if (!configDefault || typeof configDefault !== "string" || !configDefault.includes("${")) {
+  if (!configDefault || !configDefault.includes("${")) {
     return scopeManager.getAccessibleScopes(agentId);
   }
 
-  // Template path
   const result: string[] = ["global"];
-  const resolved = resolveTemplate(configDefault, ctx);
-  if (resolved !== null && validateScopeFormat(resolved) && scopeManager.validateScope(resolved)) {
-    if (resolved !== "global") result.push(resolved);
-  } else {
-    logger?.warn?.(
-      `resolveHookReadScopes: template resolution failed for "${configDefault}" → only [global, reflection]`,
-    );
-  }
+  const resolved = resolveValidateTemplate(
+    configDefault,
+    ctx,
+    scopeManager,
+    (reason) => logger?.warn?.(`resolveHookReadScopes: ${reason} → only [global, reflection]`),
+  );
+  if (resolved !== null && resolved !== "global") result.push(resolved);
   result.push(`reflection:agent:${agentId}`);
   return result;
 }

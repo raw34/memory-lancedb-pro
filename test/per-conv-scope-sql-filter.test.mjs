@@ -24,19 +24,19 @@ describe("scopeFilterToSqlCondition", () => {
   });
   it("wildcard generates LIKE with ESCAPE clause", () => {
     const sql = scopeFilterToSqlCondition(["agent:bs:conv:*"]);
-    assert.equal(sql, "scope LIKE 'agent:bs:conv:%' ESCAPE '\\\\'");
+    assert.equal(sql, "scope LIKE 'agent:bs:conv:%' ESCAPE '\\'");
   });
   it("mixed literal+wildcard joined with OR", () => {
     const sql = scopeFilterToSqlCondition(["global", "agent:bs:conv:*"]);
-    assert.equal(sql, "(scope = 'global' OR scope LIKE 'agent:bs:conv:%' ESCAPE '\\\\')");
+    assert.equal(sql, "(scope = 'global' OR scope LIKE 'agent:bs:conv:%' ESCAPE '\\')");
   });
   it("escapes _ in literal portion of wildcard pattern", () => {
     const sql = scopeFilterToSqlCondition(["a_b:*"]);
-    assert.equal(sql, "scope LIKE 'a\\\\_b:%' ESCAPE '\\\\'");
+    assert.equal(sql, "scope LIKE 'a\\_b:%' ESCAPE '\\'");
   });
   it("escapes % in literal portion of wildcard pattern", () => {
     const sql = scopeFilterToSqlCondition(["a%b:*"]);
-    assert.equal(sql, "scope LIKE 'a\\\\%b:%' ESCAPE '\\\\'");
+    assert.equal(sql, "scope LIKE 'a\\%b:%' ESCAPE '\\'");
   });
 });
 
@@ -62,8 +62,12 @@ describe("scopeFilterIncludes (application-layer mirror)", () => {
 });
 
 describe("escapeSqlLikePattern", () => {
-  it("escapes _, %, \\\\", () => {
-    assert.equal(escapeSqlLikePattern("a_b%c\\\\d"), "a\\\\_b\\\\%c\\\\\\\\d");
+  it("escapes _, %, \\", () => {
+    // Input JS string "a_b%c\\d" = actual chars: a _ b % c \ d
+    // Each meta-char gets a single leading backslash:
+    //   _ → \_ , % → \% , \ → \\
+    // Result JS string "a\\_b\\%c\\\\d" = actual chars: a \ _ b \ % c \ \ d
+    assert.equal(escapeSqlLikePattern("a_b%c\\d"), "a\\_b\\%c\\\\d");
   });
   it("leaves plain text unchanged", () => {
     assert.equal(escapeSqlLikePattern("plain"), "plain");

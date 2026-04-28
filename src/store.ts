@@ -103,14 +103,14 @@ function escapeSqlLiteral(value: string): string {
 
 /**
  * Escape SQL LIKE meta-characters (_ % \) in a literal portion of a pattern.
- * The result must be paired with `ESCAPE '\\\\'` clause when used in SQL LIKE.
- * LanceDB uses backslash escape sequences inside SQL string literals, so each
- * backslash must be doubled (1 backslash → 2 backslashes) and each LIKE
- * metachar (_, %) is prefixed with two backslashes (SQL string "\\\\x" →
- * SQL pattern "\\x" with escape char "\\" → literal x).
+ * The result must be paired with `ESCAPE '\\'` clause when used in SQL LIKE.
+ * LanceDB does NOT treat backslash as a string escape in SQL literals (standard
+ * SQL semantics: only '' escapes a single quote). Therefore one backslash in
+ * the JS string produces one backslash in the SQL string, and `\_` in the SQL
+ * pattern with ESCAPE '\' means a literal underscore.
  */
 export function escapeSqlLikePattern(value: string): string {
-  return value.replace(/[\\_%]/g, (m) => (m === "\\" ? "\\\\" : "\\\\" + m));
+  return value.replace(/[\\_%]/g, (m) => "\\" + m);
 }
 
 /**
@@ -136,7 +136,7 @@ export function scopeFilterToSqlCondition(filter?: string[]): string | undefined
       // append SQL wildcard %
       const prefix = raw.endsWith("*") ? raw.slice(0, -1) : raw;
       const escaped = escapeSqlLiteral(escapeSqlLikePattern(prefix));
-      parts.push(`scope LIKE '${escaped}%' ESCAPE '\\\\'`);
+      parts.push(`scope LIKE '${escaped}%' ESCAPE '\\'`);
     } else {
       parts.push(`scope = '${escapeSqlLiteral(raw)}'`);
     }

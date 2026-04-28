@@ -7,6 +7,7 @@ const { createScopeManager } = jiti("../src/scopes.ts");
 const {
   resolveHookDefaultScope,
   resolveHookReadScopes,
+  validateScopesConfig,
 } = jiti("../index.ts");
 
 describe("Backward compat: zero impact when feature is off", () => {
@@ -79,6 +80,37 @@ describe("Backward compat: zero impact when feature is off", () => {
         scopeManager: mgr, agentId: "system", sessionKey: "agent:system:x", configDefault: "global",
       }),
       ["global"],
+    );
+  });
+});
+
+describe("Startup config validation", () => {
+  it("accepts valid scopes.default (no wildcard)", () => {
+    assert.doesNotThrow(() => validateScopesConfig({ default: "global" }));
+    assert.doesNotThrow(() => validateScopesConfig({ default: "agent:${agentId}:conv:${convKey}" }));
+  });
+
+  it("accepts undefined scopes config", () => {
+    assert.doesNotThrow(() => validateScopesConfig(undefined));
+  });
+
+  it("rejects scopes.default with wildcard", () => {
+    assert.throws(
+      () => validateScopesConfig({ default: "agent:*" }),
+      /wildcards.*not allowed/i,
+    );
+    assert.throws(
+      () => validateScopesConfig({ default: "*" }),
+      /wildcards.*not allowed/i,
+    );
+  });
+
+  it("accepts wildcards in agentAccess entries (read-side ACL is OK)", () => {
+    assert.doesNotThrow(() =>
+      validateScopesConfig({
+        default: "global",
+        agentAccess: { admin: ["global", "agent:bs:conv:*"] },
+      }),
     );
   });
 });

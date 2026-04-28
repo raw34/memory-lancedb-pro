@@ -278,6 +278,29 @@ export function resolveHookReadScopes(params: {
   return result;
 }
 
+/**
+ * Validate `scopes` config block at plugin startup. Rejects user errors that
+ * would otherwise silently degrade at runtime.
+ *
+ * Currently rejects:
+ *   - Wildcards (`*`) in `scopes.default` — wildcards are read-side ACL only.
+ *
+ * Throws on validation failure so plugin startup fails fast.
+ */
+export function validateScopesConfig(
+  scopes: { default?: string; agentAccess?: Record<string, string[]> } | undefined,
+): void {
+  if (!scopes) return;
+
+  // 1. scopes.default must NOT contain wildcards (wildcards are read-side only)
+  if (typeof scopes.default === "string" && scopes.default.includes("*")) {
+    throw new Error(
+      `Invalid scopes.default: wildcards (*) are not allowed. ` +
+        `Wildcards may only appear in agentAccess entries. Got: "${scopes.default}"`,
+    );
+  }
+}
+
 // ============================================================================
 // Configuration & Types
 // ============================================================================
@@ -1946,6 +1969,7 @@ let _singletonState: PluginSingletonState | null = null;
 
 function _initPluginState(api: OpenClawPluginApi): PluginSingletonState {
   const config = parsePluginConfig(api.pluginConfig);
+  validateScopesConfig(config.scopes);
   const resolvedDbPath = api.resolvePath(config.dbPath || getDefaultDbPath());
 
   try {

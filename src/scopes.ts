@@ -156,6 +156,35 @@ export function matchesScopePattern(scope: string, pattern: string): boolean {
 }
 
 // ============================================================================
+// Scope Format Validation (top-level, exported for use outside this module)
+// ============================================================================
+
+/**
+ * Returns true when `scope` is syntactically valid as a scope identifier.
+ *
+ * Rules:
+ *  - Must be a non-empty string of at most 100 characters.
+ *  - Allowed chars: `[a-zA-Z0-9._:-]` plus an optional single trailing `*`.
+ *  - The bare wildcard `"*"` is also accepted.
+ *  - More than one `*` in the string is rejected.
+ */
+export function validateScopeFormat(scope: string): boolean {
+  if (!scope || typeof scope !== "string") return false;
+  const trimmed = scope.trim();
+  if (trimmed.length === 0 || trimmed.length > 100) return false;
+
+  // Allow alphanumeric, hyphens, underscores, colons, dots, and a single
+  // trailing '*' (wildcard). Mid-segment '*' is rejected. '*' alone is allowed.
+  const validFormat = /^([a-zA-Z0-9._:-]+\*?|\*)$/.test(trimmed);
+  if (!validFormat) return false;
+
+  // Reject patterns containing more than one '*'
+  if ((trimmed.match(/\*/g) ?? []).length > 1) return false;
+
+  return true;
+}
+
+// ============================================================================
 // Scope Manager Implementation
 // ============================================================================
 
@@ -389,19 +418,7 @@ export class MemoryScopeManager implements ScopeManager {
   }
 
   private validateScopeFormat(scope: string): boolean {
-    if (!scope || typeof scope !== "string") return false;
-    const trimmed = scope.trim();
-    if (trimmed.length === 0 || trimmed.length > 100) return false;
-
-    // Allow alphanumeric, hyphens, underscores, colons, dots, and a single
-    // trailing '*' (wildcard). Mid-segment '*' is rejected. '*' alone is allowed.
-    const validFormat = /^([a-zA-Z0-9._:-]+\*?|\*)$/.test(trimmed);
-    if (!validFormat) return false;
-
-    // Reject patterns containing more than one '*'
-    if ((trimmed.match(/\*/g) ?? []).length > 1) return false;
-
-    return true;
+    return validateScopeFormat(scope);
   }
 
   // Export/Import configuration

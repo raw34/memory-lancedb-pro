@@ -26,7 +26,7 @@ import {
   getEffectiveVectorDimensions,
 } from "./src/embedder.js";
 import { createRetriever, DEFAULT_RETRIEVAL_CONFIG } from "./src/retriever.js";
-import { createScopeManager, resolveScopeFilter, isSystemBypassId, parseAgentIdFromSessionKey } from "./src/scopes.js";
+import { createScopeManager, resolveScopeFilter, isSystemBypassId, parseAgentIdFromSessionKey, validateScopeFormat } from "./src/scopes.js";
 import { createMigrator } from "./src/migrate.js";
 import { registerAllMemoryTools } from "./src/tools.js";
 import { appendSelfImprovementEntry, ensureSelfImprovementLearningFiles } from "./src/self-improvement-files.js";
@@ -143,8 +143,6 @@ export function resolveTemplate(
   return result;
 }
 
-/** Regex matching the valid scope format (mirrors MemoryScopeManager#validateScopeFormat). */
-const SCOPE_FORMAT_RE = /^([a-zA-Z0-9._:-]+\*?|\*)$/;
 
 /**
  * Hook-layer entry point for write-target scope resolution.
@@ -191,7 +189,7 @@ export function resolveHookDefaultScope(params: {
 
   // Validate resolved scope: format check first (rejects injection chars),
   // then scope-manager structural check.
-  if (!SCOPE_FORMAT_RE.test(resolved) || !params.scopeManager.validateScope(resolved)) {
+  if (!validateScopeFormat(resolved) || !params.scopeManager.validateScope(resolved)) {
     logger?.warn?.(
       `resolveHookDefaultScope: resolved scope "${resolved}" failed validation → fallback "${FALLBACK}"`,
     );

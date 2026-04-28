@@ -121,6 +121,39 @@ function normalizeAgentAccessMap(
 }
 
 // ============================================================================
+// Wildcard Pattern Matching
+// ============================================================================
+
+/**
+ * Detects whether a string is a wildcard pattern (contains a trailing `*`).
+ * Used by isAccessible to decide between equality and pattern match.
+ */
+export function isWildcardPattern(s: string): boolean {
+  return typeof s === "string" && s.includes("*");
+}
+
+/**
+ * Match a scope string against a pattern.
+ * - Plain literals: strict string equality.
+ * - Trailing `*`: prefix match (the prefix portion is matched literally, regex
+ *   metachars are escaped). Only ONE trailing `*` is recognised — mid-segment
+ *   `*` is treated as a literal character.
+ *
+ * Examples:
+ *   matchesScopePattern("a:b:c", "a:b:*") === true
+ *   matchesScopePattern("a:b",   "a:b:*") === false
+ *   matchesScopePattern("any",   "*")      === true
+ *   matchesScopePattern("",      "*")      === false
+ */
+export function matchesScopePattern(scope: string, pattern: string): boolean {
+  if (typeof scope !== "string" || typeof pattern !== "string") return false;
+  if (!pattern.endsWith("*")) return scope === pattern;
+  const prefix = pattern.slice(0, -1);
+  if (prefix.length === 0) return scope.length > 0;
+  return scope.startsWith(prefix);
+}
+
+// ============================================================================
 // Scope Manager Implementation
 // ============================================================================
 

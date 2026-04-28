@@ -244,7 +244,7 @@ describe("resolveHookReadScopes", () => {
       sessionKey: "agent:bs:x",
       configDefault: "global",
     });
-    // [global, "global", reflection:agent:bs] should dedupe to [global, reflection:agent:bs]
-    assert.deepEqual(result, ["global", "reflection:agent:bs"]);
+    // Static config delegates to getAccessibleScopes — preserves existing semantics
+    assert.deepEqual([...result].sort(), ["agent:bs", "global", "reflection:agent:bs"].sort());
   });
 });

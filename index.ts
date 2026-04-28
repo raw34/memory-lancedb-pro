@@ -208,9 +208,11 @@ export function resolveHookDefaultScope(params: {
  *
  * Behaviour:
  * - System bypass agentId → ["global"]
- * - Explicit agentAccess[agentId] → that list, with templates inside resolved
+ * - Explicit agentAccess[agentId] configured → that list, with templates inside resolved
  *   (wildcards preserved as literal patterns for store layer to handle).
- * - Else (implicit case) → [global, resolvedDefault, reflection:agent:<id>]
+ * - Static (non-template) configDefault → delegate to scopeManager.getAccessibleScopes
+ *   (preserves existing [global, agent:<id>, reflection:agent:<id>] behaviour).
+ * - Template configDefault → [global, resolvedDefault, reflection:agent:<id>]
  *   (deduped — if resolvedDefault is "global", only one "global" appears)
  *
  * Entries that fail to resolve (template resolution returning null) are dropped
@@ -254,17 +256,24 @@ export function resolveHookReadScopes(params: {
     return resolved;
   }
 
-  // Implicit case: [global, resolvedDefault, reflection]
-  const result: string[] = ["global"];
-
-  if (configDefault && typeof configDefault === "string") {
-    const resolved = resolveTemplate(configDefault, ctx);
-    if (resolved !== null && validateScopeFormat(resolved) && scopeManager.validateScope(resolved)) {
-      // Avoid duplicate "global"
-      if (resolved !== "global") result.push(resolved);
-    }
+  // Implicit case (no agentAccess[agentId] configured):
+  // - Template configDefault → [global, resolvedTemplate, reflection]
+  // - Static (non-template) configDefault → defer to scopeManager.getAccessibleScopes
+  //   to preserve existing semantics (which include agent:<id> private scope)
+  if (!configDefault || typeof configDefault !== "string" || !configDefault.includes("${")) {
+    return scopeManager.getAccessibleScopes(agentId);
   }
 
+  // Template path
+  const result: string[] = ["global"];
+  const resolved = resolveTemplate(configDefault, ctx);
+  if (resolved !== null && validateScopeFormat(resolved) && scopeManager.validateScope(resolved)) {
+    if (resolved !== "global") result.push(resolved);
+  } else {
+    logger?.warn?.(
+      `resolveHookReadScopes: template resolution failed for "${configDefault}" → only [global, reflection]`,
+    );
+  }
   result.push(`reflection:agent:${agentId}`);
   return result;
 }

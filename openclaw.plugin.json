@@ -693,7 +693,8 @@
         "properties": {
           "default": {
             "type": "string",
-            "default": "global"
+            "default": "global",
+            "description": "Default write scope for memories. Supports template variables: ${agentId} (the writing agent's ID) and ${convKey} (sessionKey suffix after agent:<id>:). Example: \"agent:${agentId}:conv:${convKey}\" enables per-conversation isolation. Wildcards (*) are NOT allowed here — use them in agentAccess instead. Falls back to scopeManager.getDefaultScope (typically agent:<id>) for static (non-template) values."
           },
           "definitions": {
             "type": "object",
@@ -708,6 +709,7 @@
           },
           "agentAccess": {
             "type": "object",
+            "description": "Per-agent ACL. Entries support trailing wildcards: \"agent:bot:conv:*\" grants access to all conv scopes under bot. Templates ${agentId}/${convKey} are also supported in entries for symmetric per-conversation default ACLs.",
             "additionalProperties": {
               "type": "array",
               "items": {
@@ -1311,7 +1313,7 @@
     },
     "scopes.default": {
       "label": "Default Scope",
-      "help": "Default memory scope for new memories",
+      "help": "Default write scope. Supports template vars ${agentId}/${convKey} for per-conversation isolation (e.g. \"agent:${agentId}:conv:${convKey}\"). Wildcards (*) NOT allowed — use agentAccess for those.",
       "advanced": true
     },
     "scopes.definitions": {
@@ -1321,7 +1323,7 @@
     },
     "scopes.agentAccess": {
       "label": "Agent Access Control",
-      "help": "Define which scopes each agent can access",
+      "help": "Per-agent ACL. Entries support trailing wildcards (\"agent:bot:conv:*\") and template vars (${agentId}/${convKey}).",
       "advanced": true
     },
     "enableManagementTools": {

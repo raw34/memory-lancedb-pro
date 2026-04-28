@@ -199,6 +199,72 @@ export function resolveHookDefaultScope(params: {
   return resolved;
 }
 
+/**
+ * Hook-layer read-scope resolver.
+ *
+ * Behaviour:
+ * - System bypass agentId → ["global"]
+ * - Explicit agentAccess[agentId] → that list, with templates inside resolved
+ *   (wildcards preserved as literal patterns for store layer to handle).
+ * - Else (implicit case) → [global, resolvedDefault, reflection:agent:<id>]
+ *   (deduped — if resolvedDefault is "global", only one "global" appears)
+ *
+ * Entries that fail to resolve (template resolution returning null) are dropped
+ * from the result with a warn log.
+ */
+export function resolveHookReadScopes(params: {
+  scopeManager: ReturnType<typeof createScopeManager>;
+  agentId: string | undefined;
+  sessionKey: string | undefined;
+  configDefault: string | undefined;
+  logger?: { warn?: (msg: string) => void; debug?: (msg: string) => void };
+}): string[] {
+  const { scopeManager, agentId, sessionKey, configDefault, logger } = params;
+
+  if (!agentId || isSystemBypassId(agentId)) {
+    return ["global"];
+  }
+
+  const convKey = extractConvKey(sessionKey, agentId);
+  const ctx = { agentId, convKey };
+
+  // Try explicit agentAccess first
+  const config = scopeManager.exportConfig();
+  const explicit = config.agentAccess[agentId];
+  if (Array.isArray(explicit) && explicit.length > 0) {
+    const resolved: string[] = [];
+    for (const entry of explicit) {
+      if (typeof entry !== "string" || !entry) continue;
+      // Wildcards passed through; templates resolved
+      if (!entry.includes("${")) {
+        resolved.push(entry);
+        continue;
+      }
+      const r = resolveTemplate(entry, ctx);
+      if (r === null) {
+        logger?.warn?.(`resolveHookReadScopes: agentAccess entry "${entry}" failed to resolve, dropped`);
+        continue;
+      }
+      resolved.push(r);
+    }
+    return resolved;
+  }
+
+  // Implicit case: [global, resolvedDefault, reflection]
+  const result: string[] = ["global"];
+
+  if (configDefault && typeof configDefault === "string") {
+    const resolved = resolveTemplate(configDefault, ctx);
+    if (resolved !== null && validateScopeFormat(resolved) && scopeManager.validateScope(resolved)) {
+      // Avoid duplicate "global"
+      if (resolved !== "global") result.push(resolved);
+    }
+  }
+
+  result.push(`reflection:agent:${agentId}`);
+  return result;
+}
+
 // ============================================================================
 // Configuration & Types
 // ============================================================================

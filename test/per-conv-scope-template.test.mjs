@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import jitiFactory from "jiti";
 const jiti = jitiFactory(import.meta.url, { interopDefault: true });
-const { extractConvKey, resolveTemplate, resolveHookDefaultScope } = jiti("../index.ts");
+const { extractConvKey, resolveTemplate, resolveHookDefaultScope, resolveHookReadScopes } = jiti("../index.ts");
 const { createScopeManager } = jiti("../src/scopes.ts");
 
 describe("extractConvKey", () => {
@@ -155,5 +155,87 @@ describe("resolveHookDefaultScope", () => {
       configDefault: "agent:${agentId}:conv:${convKey}",
     });
     assert.equal(result, "global");
+  });
+});
+
+describe("resolveHookReadScopes", () => {
+  it("returns [global, resolvedDefault, reflection:agent:<id>] when no agentAccess", () => {
+    const mgr = createScopeManager({
+      default: "global",
+      definitions: { global: { description: "" } },
+    });
+    const result = resolveHookReadScopes({
+      scopeManager: mgr,
+      agentId: "bs",
+      sessionKey: "agent:bs:discord:channel:456",
+      configDefault: "agent:${agentId}:conv:${convKey}",
+    });
+    assert.deepEqual(result, [
+      "global",
+      "agent:bs:conv:discord:channel:456",
+      "reflection:agent:bs",
+    ]);
+  });
+
+  it("returns agentAccess list (templates resolved, wildcards preserved) when configured", () => {
+    const mgr = createScopeManager({
+      default: "global",
+      definitions: { global: { description: "" } },
+      agentAccess: {
+        monitor: ["global", "agent:bs:conv:*", "reflection:agent:bs"],
+      },
+    });
+    const result = resolveHookReadScopes({
+      scopeManager: mgr,
+      agentId: "monitor",
+      sessionKey: "agent:monitor:cli:run",
+      configDefault: "global",
+    });
+    assert.deepEqual(result, ["global", "agent:bs:conv:*", "reflection:agent:bs"]);
+  });
+
+  it("resolves templates inside agentAccess entries", () => {
+    const mgr = createScopeManager({
+      default: "global",
+      definitions: { global: { description: "" } },
+      agentAccess: {
+        bs: ["global", "agent:${agentId}:conv:${convKey}"],
+      },
+    });
+    const result = resolveHookReadScopes({
+      scopeManager: mgr,
+      agentId: "bs",
+      sessionKey: "agent:bs:discord:channel:456",
+      configDefault: "agent:${agentId}:conv:${convKey}",
+    });
+    // agentAccess takes precedence; templates inside it ARE resolved
+    assert.deepEqual(result, ["global", "agent:bs:conv:discord:channel:456"]);
+    // No auto-injected reflection scope when explicit agentAccess is set
+  });
+
+  it("for bypass agent returns ['global'] (no template resolution)", () => {
+    const mgr = createScopeManager({ default: "global", definitions: { global: { description: "" } } });
+    const result = resolveHookReadScopes({
+      scopeManager: mgr,
+      agentId: "system",
+      sessionKey: "agent:system:foo",
+      configDefault: "agent:${agentId}:conv:${convKey}",
+    });
+    assert.deepEqual(result, ["global"]);
+  });
+
+  it("dedupes when resolved default equals 'global' (static config)", () => {
+    const mgr = createScopeManager({
+      default: "global",
+      definitions: { global: { description: "" } },
+    });
+    const result = resolveHookReadScopes({
+      scopeManager: mgr,
+      agentId: "bs",
+      sessionKey: "agent:bs:x",
+      configDefault: "global",
+    });
+    // [global, "global", reflection:agent:bs] should dedupe to [global, reflection:agent:bs]
+    assert.deepEqual(result, ["global", "reflection:agent:bs"]);
   });
 });

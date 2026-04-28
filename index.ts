@@ -149,8 +149,8 @@ export function resolveTemplate(
  *
  * - For system bypass agents → "global" (fix for PR #568 review item 2:
  *   never call scopeManager.getDefaultScope on bypass agents).
- * - For empty/undefined configDefault → "global"
- * - For static (non-template) configDefault → returned as-is if valid, else "global"
+ * - For empty/undefined/non-template configDefault → scopeManager.getDefaultScope(agentId) (agent private scope or config.default)
+ * - For template configDefault (contains "${") → substitute and return; on resolution/validation failure → "global"
  * - For template configDefault → substitute and return; on resolution failure → "global"
  *
  * This function never throws. Failures degrade to "global" + a warn log.
@@ -173,8 +173,12 @@ export function resolveHookDefaultScope(params: {
     return FALLBACK;
   }
 
-  if (!configDefault || typeof configDefault !== "string") {
-    return FALLBACK;
+  if (!configDefault || typeof configDefault !== "string" || !configDefault.includes("${")) {
+    // No template — delegate to scopeManager which returns the agent's private scope
+    // ("agent:<id>") when available, falling back to config.default.  Static configDefault
+    // values (e.g. "global") are NOT treated as overrides — the scope manager already
+    // incorporates config.default internally via getDefaultScope.
+    return params.scopeManager.getDefaultScope(agentId);
   }
 
   const convKey = extractConvKey(sessionKey, agentId);
@@ -2620,7 +2624,14 @@ const memoryLanceDBProPlugin = {
         const recallWork = async (): Promise<{ prependContext: string } | undefined> => {
           // Determine agent ID and accessible scopes
           const agentId = resolveHookAgentId(ctx?.agentId, (event as any).sessionKey);
-          const accessibleScopes = resolveScopeFilter(scopeManager, agentId);
+          const sessionKey = typeof (event as any).sessionKey === "string" ? (event as any).sessionKey : "";
+          const accessibleScopes = resolveHookReadScopes({
+            scopeManager,
+            agentId,
+            sessionKey,
+            configDefault: config.scopes?.default,
+            logger: api.logger,
+          });
 
           // Use cached raw user message for the recall query to avoid channel
           // metadata noise (e.g. Slack's Conversation info JSON with message_id,
@@ -3016,11 +3027,21 @@ const memoryLanceDBProPlugin = {
 
           // Determine agent ID and default scope
           const agentId = resolveHookAgentId(ctx?.agentId, (event as any).sessionKey);
-          const accessibleScopes = resolveScopeFilter(scopeManager, agentId);
-          const defaultScope = isSystemBypassId(agentId)
-            ? config.scopes?.default ?? "global"
-            : scopeManager.getDefaultScope(agentId);
           const sessionKey = ctx?.sessionKey || (event as any).sessionKey || "unknown";
+          const accessibleScopes = resolveHookReadScopes({
+            scopeManager,
+            agentId,
+            sessionKey,
+            configDefault: config.scopes?.default,
+            logger: api.logger,
+          });
+          const defaultScope = resolveHookDefaultScope({
+            scopeManager,
+            agentId,
+            sessionKey,
+            configDefault: config.scopes?.default,
+            logger: api.logger,
+          });
 
           api.logger.debug(
             `memory-lancedb-pro: auto-capture agent_end payload for agent ${agentId} (sessionKey=${sessionKey}, captureAssistant=${config.captureAssistant === true}, ${summarizeAgentEndMessages(event.messages)})`,
@@ -3739,9 +3760,13 @@ const memoryLanceDBProPlugin = {
           const timeHms = timeIso.split(".")[0];
           const timeCompact = timeIso.replace(/[:.]/g, "");
           const reflectionRunAgentId = resolveReflectionRunAgentId(cfg, sourceAgentId);
-          const targetScope = isSystemBypassId(sourceAgentId)
-            ? config.scopes?.default ?? "global"
-            : scopeManager.getDefaultScope(sourceAgentId);
+          const targetScope = resolveHookDefaultScope({
+            scopeManager,
+            agentId: sourceAgentId,
+            sessionKey,
+            configDefault: config.scopes?.default,
+            logger: api.logger,
+          });
           const toolErrorSignals = sessionKey
             ? (reflectionErrorStateBySession.get(sessionKey)?.entries ?? []).slice(-reflectionErrorReminderMaxEntries)
             : [];

@@ -126,24 +126,33 @@ describe("resolveHookDefaultScope", () => {
     assert.equal(result, "global");
   });
 
-  it("returns static value unchanged when no template", () => {
+  it("delegates to scopeManager.getDefaultScope when configDefault has no template variables", () => {
+    // Static configDefault (no "${") means no per-conv override is active.
+    // The function delegates to scopeManager.getDefaultScope(agentId), which returns
+    // the agent's private scope when available, not the literal static string.
     const result = resolveHookDefaultScope({
       scopeManager: mgr,
       agentId: "bs",
       sessionKey: "agent:bs:x",
       configDefault: "global",
     });
-    assert.equal(result, "global");
+    // mgr has no explicit agentAccess for "bs", getDefaultScope returns "agent:bs".
+    assert.equal(result, "agent:bs");
   });
 
-  it("returns 'global' when configDefault is undefined or empty", () => {
+  it("delegates to scopeManager.getDefaultScope when configDefault is undefined or empty", () => {
+    // When no configDefault template is set, resolveHookDefaultScope should delegate
+    // to scopeManager.getDefaultScope(agentId), which returns the agent's private scope
+    // ("agent:<id>") when available, not a hardcoded "global".
     const result = resolveHookDefaultScope({
       scopeManager: mgr,
       agentId: "bs",
       sessionKey: "agent:bs:x",
       configDefault: undefined,
     });
-    assert.equal(result, "global");
+    // mgr has no explicit agentAccess for "bs", so getAccessibleScopes returns
+    // ["global", "agent:bs", "reflection:agent:bs"] and getDefaultScope returns "agent:bs".
+    assert.equal(result, "agent:bs");
   });
 
   it("falls back to 'global' when resolved scope fails validateScope (e.g., contains single-quote)", () => {

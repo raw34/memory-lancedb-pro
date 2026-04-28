@@ -662,7 +662,7 @@ export class MemoryStore {
 
     const row = rows[0];
     const rowScope = (row.scope as string | undefined) ?? "global";
-    if (scopeFilter && scopeFilter.length > 0 && !scopeFilter.includes(rowScope)) {
+    if (!scopeFilterIncludes(scopeFilter, rowScope)) {
       return null;
     }
 
@@ -693,11 +693,9 @@ export class MemoryStore {
     let query = this.table!.vectorSearch(vector).distanceType('cosine').limit(fetchLimit);
 
     // Apply scope filter if provided
-    if (scopeFilter && scopeFilter.length > 0) {
-      const scopeConditions = scopeFilter
-        .map((scope) => `scope = '${escapeSqlLiteral(scope)}'`)
-        .join(" OR ");
-      query = query.where(`(${scopeConditions}) OR scope IS NULL`); // NULL for backward compatibility
+    const scopeWhere = scopeFilterToSqlCondition(scopeFilter);
+    if (scopeWhere !== undefined) {
+      query = query.where(`(${scopeWhere}) OR scope IS NULL`); // NULL for backward compatibility
     }
 
     const results = await query.toArray();
@@ -712,11 +710,7 @@ export class MemoryStore {
       const rowScope = (row.scope as string | undefined) ?? "global";
 
       // Double-check scope filter in application layer
-      if (
-        scopeFilter &&
-        scopeFilter.length > 0 &&
-        !scopeFilter.includes(rowScope)
-      ) {
+      if (!scopeFilterIncludes(scopeFilter, rowScope)) {
         continue;
       }
 
@@ -768,12 +762,10 @@ export class MemoryStore {
       let searchQuery = this.table!.search(query, "fts").limit(fetchLimit);
 
       // Apply scope filter if provided
-      if (scopeFilter && scopeFilter.length > 0) {
-        const scopeConditions = scopeFilter
-          .map((scope) => `scope = '${escapeSqlLiteral(scope)}'`)
-          .join(" OR ");
+      const scopeWhere = scopeFilterToSqlCondition(scopeFilter);
+      if (scopeWhere !== undefined) {
         searchQuery = searchQuery.where(
-          `(${scopeConditions}) OR scope IS NULL`,
+          `(${scopeWhere}) OR scope IS NULL`,
         );
       }
 
@@ -784,11 +776,7 @@ export class MemoryStore {
         const rowScope = (row.scope as string | undefined) ?? "global";
 
         // Double-check scope filter in application layer
-        if (
-          scopeFilter &&
-          scopeFilter.length > 0 &&
-          !scopeFilter.includes(rowScope)
-        ) {
+        if (!scopeFilterIncludes(scopeFilter, rowScope)) {
           continue;
         }
 
@@ -846,11 +834,9 @@ export class MemoryStore {
       "metadata",
     ]);
 
-    if (scopeFilter && scopeFilter.length > 0) {
-      const scopeConditions = scopeFilter
-        .map(scope => `scope = '${escapeSqlLiteral(scope)}'`)
-        .join(" OR ");
-      searchQuery = searchQuery.where(`(${scopeConditions}) OR scope IS NULL`);
+    const scopeWhere = scopeFilterToSqlCondition(scopeFilter);
+    if (scopeWhere !== undefined) {
+      searchQuery = searchQuery.where(`(${scopeWhere}) OR scope IS NULL`);
     }
 
     const rows = await searchQuery.toArray();
@@ -858,7 +844,7 @@ export class MemoryStore {
 
     for (const row of rows) {
       const rowScope = (row.scope as string | undefined) ?? "global";
-      if (scopeFilter && scopeFilter.length > 0 && !scopeFilter.includes(rowScope)) {
+      if (!scopeFilterIncludes(scopeFilter, rowScope)) {
         continue;
       }
 
@@ -941,11 +927,7 @@ export class MemoryStore {
     const rowScope = (candidates[0].scope as string | undefined) ?? "global";
 
     // Check scope permissions
-    if (
-      scopeFilter &&
-      scopeFilter.length > 0 &&
-      !scopeFilter.includes(rowScope)
-    ) {
+    if (!scopeFilterIncludes(scopeFilter, rowScope)) {
       throw new Error(`Memory ${resolvedId} is outside accessible scopes`);
     }
 
@@ -970,11 +952,9 @@ export class MemoryStore {
     // Build where conditions
     const conditions: string[] = [];
 
-    if (scopeFilter && scopeFilter.length > 0) {
-      const scopeConditions = scopeFilter
-        .map((scope) => `scope = '${escapeSqlLiteral(scope)}'`)
-        .join(" OR ");
-      conditions.push(`((${scopeConditions}) OR scope IS NULL)`);
+    const scopeWhere = scopeFilterToSqlCondition(scopeFilter);
+    if (scopeWhere !== undefined) {
+      conditions.push(`((${scopeWhere}) OR scope IS NULL)`);
     }
 
     if (category) {
@@ -1032,11 +1012,9 @@ export class MemoryStore {
 
     let query = this.table!.query();
 
-    if (scopeFilter && scopeFilter.length > 0) {
-      const scopeConditions = scopeFilter
-        .map((scope) => `scope = '${escapeSqlLiteral(scope)}'`)
-        .join(" OR ");
-      query = query.where(`((${scopeConditions}) OR scope IS NULL)`);
+    const scopeWhere = scopeFilterToSqlCondition(scopeFilter);
+    if (scopeWhere !== undefined) {
+      query = query.where(`((${scopeWhere}) OR scope IS NULL)`);
     }
 
     const results = await query.select(["scope", "category"]).toArray();
@@ -1124,11 +1102,7 @@ export class MemoryStore {
       const rowScope = (row.scope as string | undefined) ?? "global";
 
       // Check scope permissions
-      if (
-        scopeFilter &&
-        scopeFilter.length > 0 &&
-        !scopeFilter.includes(rowScope)
-      ) {
+      if (!scopeFilterIncludes(scopeFilter, rowScope)) {
         throw new Error(`Memory ${id} is outside accessible scopes`);
       }
 
@@ -1231,11 +1205,12 @@ export class MemoryStore {
 
     const conditions: string[] = [];
 
-    if (scopeFilter.length > 0) {
-      const scopeConditions = scopeFilter
-        .map((scope) => `scope = '${escapeSqlLiteral(scope)}'`)
-        .join(" OR ");
-      conditions.push(`(${scopeConditions})`);
+    // XXX: bulkDelete has no isExplicitDenyAllScopeFilter guard at top; empty []
+    // previously skipped scope condition (could trigger safety error), but now
+    // scopeFilterToSqlCondition([]) returns '1'='0' (delete nothing). Safer.
+    const scopeWhere = scopeFilterToSqlCondition(scopeFilter);
+    if (scopeWhere !== undefined) {
+      conditions.push(`(${scopeWhere})`);
     }
 
     if (beforeTimestamp) {
@@ -1326,11 +1301,12 @@ export class MemoryStore {
 
     const conditions: string[] = [`timestamp < ${maxTimestamp}`];
 
-    if (scopeFilter && scopeFilter.length > 0) {
-      const scopeConditions = scopeFilter
-        .map((scope) => `scope = '${escapeSqlLiteral(scope)}'`)
-        .join(" OR ");
-      conditions.push(`((${scopeConditions}) OR scope IS NULL)`);
+    // XXX: fetchForCompaction has no isExplicitDenyAllScopeFilter guard at top;
+    // empty [] now yields '1'='0' (fetch nothing), which is the intended
+    // explicit-deny semantic. Compaction callers should not pass [] here.
+    const scopeWhere = scopeFilterToSqlCondition(scopeFilter);
+    if (scopeWhere !== undefined) {
+      conditions.push(`((${scopeWhere}) OR scope IS NULL)`);
     }
 
     const whereClause = conditions.join(" AND ");
